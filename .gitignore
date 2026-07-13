@@ -1,0 +1,17 @@
+# Entorno
+.venv/
+.env
+
+# Datos y artefactos generados
+.qdrant_data/
+docs_output/*.md
+!docs_output/.gitkeep
+
+# Caché de embeddings (modelos fastembed descargados en runtime)
+.fastembed_cache/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
