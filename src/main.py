@@ -20,7 +20,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from . import tools
+from . import references, tools
 from .rag import RAGEngine
 
 console = Console()
@@ -42,6 +42,10 @@ preguntas que cruzan varios documentos o cuando no sabes en qué fichero está l
 respuesta.
 - read_file: leer un documento concreto entero. Úsala cuando necesites el \
 detalle completo de un paper específico.
+- search_references: buscar papers en fuentes académicas externas (Semantic \
+Scholar / arXiv) para DESCUBRIR literatura que aún no tienes en local.
+- download_reference: descargar a knowledge_base/ un PDF encontrado con \
+search_references (después indéxalo con ingest_corpus).
 - write_summary: escribir el reporte final en docs_output/. Un reporte SIEMPRE \
 lleva un abstract conciso seguido de una explicación completa del paper \
 (problema, metodología, resultados, limitaciones y relevancia clínica).
@@ -49,6 +53,8 @@ lleva un abstract conciso seguido de una explicación completa del paper \
 Directrices:
 - Cuando tengas información suficiente para actuar, actúa. No repreguntes lo ya \
 establecido ni enumeres opciones que no vas a seguir.
+- Para recopilar literatura nueva sigue este flujo: search_references → \
+download_reference → ingest_corpus → search_corpus/read_file → write_summary.
 - Cita las fuentes (nombre del documento) en reportes y respuestas.
 - Responde en español.
 """
@@ -146,7 +152,42 @@ def write_summary(
     )
 
 
-AGENT_TOOLS = [read_directory, read_file, ingest_corpus, search_corpus, write_summary]
+@beta_tool
+def search_references(query: str, limit: int = 5) -> str:
+    """Busca papers en fuentes académicas externas (Semantic Scholar / arXiv) y
+    devuelve candidatos con su URL de PDF descargable.
+
+    Úsala para descubrir literatura que aún no está en knowledge_base/.
+
+    Args:
+        query: Términos de búsqueda (tema, título, autores).
+        limit: Número máximo de resultados (por defecto 5).
+    """
+    return references.search_references(query, limit)
+
+
+@beta_tool
+def download_reference(url: str, filename: str) -> str:
+    """Descarga un PDF (de search_references) a knowledge_base/.
+
+    Después usa ingest_corpus para indexarlo y poder consultarlo o resumirlo.
+
+    Args:
+        url: URL http(s) directa al PDF.
+        filename: Nombre con el que guardarlo, p. ej. "kerbl2023.pdf".
+    """
+    return references.download_reference(url, filename)
+
+
+AGENT_TOOLS = [
+    read_directory,
+    read_file,
+    ingest_corpus,
+    search_corpus,
+    search_references,
+    download_reference,
+    write_summary,
+]
 
 
 # --- Bucle del agente ---------------------------------------------------------

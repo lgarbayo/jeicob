@@ -25,7 +25,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from . import tools
+from . import references, tools
 from .rag import RAGEngine
 
 console = Console()
@@ -47,12 +47,18 @@ vez antes de consultar el corpus.
 - search_corpus: búsqueda semántica sobre el corpus indexado. Úsala para \
 preguntas que cruzan varios documentos.
 - read_file: leer un documento concreto entero.
+- search_references: buscar papers en fuentes académicas externas (Semantic \
+Scholar / arXiv) para DESCUBRIR literatura que aún no tienes en local.
+- download_reference: descargar a knowledge_base/ un PDF encontrado con \
+search_references (después indéxalo con ingest_corpus).
 - write_summary: escribir el reporte final en docs_output/. Un reporte SIEMPRE \
 lleva un abstract conciso seguido de una explicación completa del paper \
 (problema, metodología, resultados, limitaciones y relevancia clínica).
 
 Directrices:
 - Cuando tengas información suficiente para actuar, actúa.
+- Para recopilar literatura nueva: search_references → download_reference → \
+ingest_corpus → search_corpus/read_file → write_summary.
 - Cita las fuentes (nombre del documento) en reportes y respuestas.
 - Responde en español.
 """
@@ -128,6 +134,45 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "search_references",
+            "description": "Busca papers en fuentes académicas externas (Semantic "
+            "Scholar / arXiv) y devuelve candidatos con su URL de PDF. Para "
+            "descubrir literatura que aún no está en knowledge_base/.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Términos de búsqueda (tema, título, autores).",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Número máximo de resultados (por defecto 5).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "download_reference",
+            "description": "Descarga a knowledge_base/ un PDF encontrado con "
+            "search_references. Después usa ingest_corpus para indexarlo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL http(s) directa al PDF."},
+                    "filename": {"type": "string", "description": "Nombre del .pdf a guardar."},
+                },
+                "required": ["url", "filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_summary",
             "description": "Escribe el reporte final en docs_output/. Debe llevar un "
             "abstract conciso seguido de una explicación completa del paper.",
@@ -162,6 +207,8 @@ DISPATCH = {
     "read_file": lambda path: tools.read_file(path),
     "ingest_corpus": lambda: _get_rag().ingest_directory(),
     "search_corpus": lambda question: _get_rag().query(question),
+    "search_references": lambda query, limit=5: references.search_references(query, limit),
+    "download_reference": lambda url, filename: references.download_reference(url, filename),
     "write_summary": lambda **kw: tools.write_summary(**kw),
 }
 

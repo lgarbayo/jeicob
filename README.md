@@ -14,9 +14,10 @@ desacoplada y es usable de forma independiente.
 
 Le hablas por terminal ("resúmeme el paper de DICOM en `dicom.md`") y el agente,
 usando **Claude con *tool calling* nativo**, decide por sí mismo qué herramientas
-encadenar: mira qué documentos hay, los indexa en una base vectorial, recupera lo
-relevante o lee un paper entero, y escribe un reporte estructurado (abstract +
-explicación completa) en `docs_output/`.
+encadenar: mira qué documentos hay, **descubre y descarga papers nuevos de fuentes
+académicas**, los indexa en una base vectorial, recupera lo relevante o lee un
+paper entero, y escribe un reporte estructurado (abstract + explicación completa)
+en `docs_output/`.
 
 ---
 
@@ -203,6 +204,8 @@ Las **5 tools** que ve Claude:
 | `read_file(path)` | `tools.read_file` | Leer un documento concreto entero |
 | `ingest_corpus()` | `rag.ingest_directory` | Indexar todo el corpus (una vez) |
 | `search_corpus(question)` | `rag.query` | Buscar por significado en el corpus |
+| `search_references(query)` | `references.search_references` | Descubrir papers en fuentes académicas externas |
+| `download_reference(url, filename)` | `references.download_reference` | Descargar un PDF encontrado a `knowledge_base/` |
 | `write_summary(...)` | `tools.write_summary` | Escribir el reporte final |
 
 ### 6.2. Las herramientas de sistema (`src/tools.py`)
@@ -259,6 +262,26 @@ Clase **`RAGEngine`** que encapsula Qdrant + embeddings.
 - Usa la **API no deprecada** de qdrant-client (`upsert`/`query_points` con
   `models.Document`), no la interfaz de conveniencia `add()`/`query()`.
 
+### 6.4. Recopilación de referencias (`src/references.py`)
+
+Cierra el ciclo de la misión ("**buscar**, ingerir y resumir"): además de trabajar
+con lo que hay en `knowledge_base/`, el agente puede **descubrir y descargar**
+literatura nueva de fuentes académicas. Todo con la librería estándar, **sin
+dependencias ni API keys nuevas**.
+
+- **`search_references(query, limit=5)`** → busca papers en **Semantic Scholar**
+  (cubre CS + biomédico/clínico) y, si esa API falla o va saturada (su pool anónimo
+  está limitado), **cae automáticamente a la API de arXiv** (muy fiable). Devuelve
+  título, autores, año y la **URL de PDF descargable**.
+
+- **`download_reference(url, filename)`** → descarga un PDF a `knowledge_base/`.
+  **Confinado a esa carpeta** (mismo sandbox que `write_summary`: nombre base +
+  `.pdf`), solo acepta `http(s)`, **valida que sea un PDF** (cabecera `%PDF`) y
+  limita el tamaño a 50 MB. Tras descargar, se indexa con `ingest_corpus`.
+
+Flujo completo que habilita: **descubrir → descargar → indexar → recuperar →
+resumir**, todo autónomo. Disponible en las dos variantes (Claude y Ollama).
+
 ---
 
 ## 7. Formato del reporte generado
@@ -314,6 +337,7 @@ jeicob/
 │   ├── __init__.py
 │   ├── tools.py            # Fase 2 — tools de sistema (sandbox)
 │   ├── rag.py              # Fase 3 — motor RAG (Qdrant + fastembed)
+│   ├── references.py       # Recopilación de referencias (Semantic Scholar/arXiv)
 │   ├── main.py             # Fase 4 — orquestador CLI con Claude (ReAct)
 │   └── main_local.py       # Variante local gratuita con Ollama (§5.1)
 ├── knowledge_base/         # entrada: papers a analizar
