@@ -178,7 +178,9 @@ class RAGEngine:
             payload = punto.payload or {}
             fuente = payload.get("source", "desconocida")
             texto = payload.get("document", "")
-            bloques.append(f"[{i}] fuente: {fuente} | score: {punto.score:.3f}\n{texto}")
+            bloques.append(
+                f"[{i}] fuente: {fuente} | score: {punto.score:.3f}\n{texto}"
+            )
         return "\n\n".join(bloques)
 
     def count(self) -> int:

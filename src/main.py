@@ -73,6 +73,7 @@ def _get_rag() -> RAGEngine:
 
 # --- Tools expuestas al modelo (envuelven Fases 2 y 3) ------------------------
 
+
 @beta_tool
 def read_directory() -> str:
     """Lista los documentos de referencia disponibles en knowledge_base/.
@@ -195,6 +196,7 @@ AGENT_TOOLS = [
 
 
 # --- Bucle del agente ---------------------------------------------------------
+
 
 def _run_turn(client: Anthropic, messages: list) -> None:
     """Ejecuta un turno completo (con posibles llamadas a tools) e imprime la

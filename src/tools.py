@@ -34,6 +34,7 @@ MAX_READ_CHARS = 100_000
 
 # --- Utilidades internas de seguridad -----------------------------------------
 
+
 def _resolve_within(base: Path, user_path: str) -> Path:
     """Resuelve `user_path` y garantiza que queda dentro de `base`.
 
@@ -42,13 +43,12 @@ def _resolve_within(base: Path, user_path: str) -> Path:
     """
     candidate = (base / user_path).resolve()
     if candidate != base and base not in candidate.parents:
-        raise ValueError(
-            f"Ruta '{user_path}' fuera del directorio permitido ({base})."
-        )
+        raise ValueError(f"Ruta '{user_path}' fuera del directorio permitido ({base}).")
     return candidate
 
 
 # --- Tools expuestas al LLM ---------------------------------------------------
+
 
 def read_directory() -> str:
     """Lista los documentos de referencia disponibles en `knowledge_base/`.

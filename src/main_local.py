@@ -173,8 +173,14 @@ TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL http(s) directa al PDF."},
-                    "filename": {"type": "string", "description": "Nombre del .pdf a guardar."},
+                    "url": {
+                        "type": "string",
+                        "description": "URL http(s) directa al PDF.",
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "Nombre del .pdf a guardar.",
+                    },
                 },
                 "required": ["url", "filename"],
             },
@@ -189,9 +195,15 @@ TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "filename": {"type": "string", "description": "Nombre del .md de salida."},
+                    "filename": {
+                        "type": "string",
+                        "description": "Nombre del .md de salida.",
+                    },
                     "title": {"type": "string", "description": "Título del reporte."},
-                    "abstract": {"type": "string", "description": "Resumen conciso (3-6 frases)."},
+                    "abstract": {
+                        "type": "string",
+                        "description": "Resumen conciso (3-6 frases).",
+                    },
                     "full_explanation": {
                         "type": "string",
                         "description": "Explicación completa y detallada (más extensa "
@@ -203,7 +215,10 @@ TOOL_SCHEMAS = [
                         "items": {"type": "string"},
                         "description": "Puntos clave opcionales.",
                     },
-                    "source": {"type": "string", "description": "Documento fuente (opcional)."},
+                    "source": {
+                        "type": "string",
+                        "description": "Documento fuente (opcional).",
+                    },
                 },
                 "required": ["filename", "title", "abstract", "full_explanation"],
             },
@@ -217,7 +232,9 @@ DISPATCH = {
     "read_file": lambda path: tools.read_file(path),
     "ingest_corpus": lambda: _get_rag().ingest_directory(),
     "search_corpus": lambda question: _get_rag().query(question),
-    "search_references": lambda query, limit=5: references.search_references(query, limit),
+    "search_references": lambda query, limit=5: references.search_references(
+        query, limit
+    ),
     "download_reference": lambda url, filename: _download_and_index(url, filename),
     "write_summary": lambda **kw: tools.write_summary(**kw),
 }
@@ -237,6 +254,7 @@ def _run_tool(name: str, args: dict) -> str:
 
 
 # --- Bucle del agente (ReAct manual) -----------------------------------------
+
 
 def _run_turn(client: Client, messages: list) -> None:
     """Ejecuta un turno: alterna llamadas al modelo y ejecución de tools hasta
@@ -279,7 +297,9 @@ def main() -> None:
             f"[bold red]El modelo '{MODEL}' no está descargado.[/] "
             f"Descárgalo con [bold]ollama pull {MODEL}[/]."
         )
-        console.print(f"[dim]Modelos disponibles: {', '.join(disponibles) or '(ninguno)'}[/]")
+        console.print(
+            f"[dim]Modelos disponibles: {', '.join(disponibles) or '(ninguno)'}[/]"
+        )
         sys.exit(1)
 
     messages: list = [{"role": "system", "content": SYSTEM_PROMPT}]

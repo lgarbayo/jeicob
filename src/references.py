@@ -119,8 +119,9 @@ def _formatear(query: str, referencias: list[dict]) -> str:
             f"[{i}] {r['title']} ({year}) — {autores or 'autor desconocido'}\n    {disp}"
         )
     return (
-        f"Referencias para '{query}' (vía {fuente}):\n" + "\n".join(lineas) +
-        "\n\nPara añadir una al corpus: download_reference(url_del_PDF, nombre.pdf), "
+        f"Referencias para '{query}' (vía {fuente}):\n"
+        + "\n".join(lineas)
+        + "\n\nPara añadir una al corpus: download_reference(url_del_PDF, nombre.pdf), "
         "luego ingest_corpus."
     )
 
