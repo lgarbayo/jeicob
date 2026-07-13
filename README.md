@@ -128,6 +128,45 @@ tú › haz un reporte completo del paper de gaussian splatting en gs.md
 > **Primera ejecución:** la primera vez que se indexa o consulta, `fastembed`
 > descarga el modelo de embeddings (~0.22 GB) y lo cachea localmente.
 
+### 5.1. Modo local gratuito (Ollama, sin API key)
+
+Existe una segunda variante del orquestador, `src/main_local.py`, que usa un
+**modelo local servido por [Ollama](https://ollama.com)** en lugar de Claude:
+**0 € por token, sin API key y sin que los documentos salgan de tu máquina**
+(útil para datos clínicos sensibles). Reutiliza exactamente las mismas tools y el
+mismo motor RAG; solo cambia el "cerebro".
+
+Requisitos: [Ollama](https://ollama.com) instalado + un modelo con soporte de
+*tool calling* (recomendado `qwen2.5`).
+
+```bash
+# 1. Arranca el servidor Ollama (en una terminal aparte)
+ollama serve
+
+# 2. Descarga un modelo con tools (~4.7 GB la primera vez)
+ollama pull qwen2.5:7b
+
+# 3. Lanza el agente local
+uv run python -m src.main_local
+```
+
+Variables de entorno propias del modo local:
+
+| Variable | Por defecto | Descripción |
+|----------|-------------|-------------|
+| `JEICOB_LOCAL_MODEL` | `qwen2.5:7b` | Modelo de Ollama a usar (p. ej. `qwen2.5:14b`) |
+| `OLLAMA_HOST` | `http://localhost:11434` | URL del servidor Ollama |
+
+**Contrapartidas** frente a la versión Claude: el *tool calling* de los modelos
+locales es menos fiable (puede equivocarse más al encadenar herramientas) y la
+calidad de síntesis es menor. A cambio, es gratis y privado. Como Ollama no ofrece
+un *tool runner*, `main_local.py` implementa el bucle ReAct a mano.
+
+| Variante | Fichero | Coste | Calidad | Privacidad |
+|----------|---------|-------|---------|------------|
+| Claude | `src/main.py` | De pago (API key) | Alta | Datos van a la API |
+| Ollama | `src/main_local.py` | **Gratis** | Media | **100% local** |
+
 ---
 
 ## 6. Cómo funciona por dentro (el "CÓMO")
@@ -275,7 +314,8 @@ jeicob/
 │   ├── __init__.py
 │   ├── tools.py            # Fase 2 — tools de sistema (sandbox)
 │   ├── rag.py              # Fase 3 — motor RAG (Qdrant + fastembed)
-│   └── main.py             # Fase 4 — orquestador CLI (ReAct)
+│   ├── main.py             # Fase 4 — orquestador CLI con Claude (ReAct)
+│   └── main_local.py       # Variante local gratuita con Ollama (§5.1)
 ├── knowledge_base/         # entrada: papers a analizar
 └── docs_output/            # salida: reportes Markdown
 ```

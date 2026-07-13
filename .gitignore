@@ -7,6 +7,10 @@
 docs_output/*.md
 !docs_output/.gitkeep
 
+# Documentos fuente del usuario (papers): no versionar en el repo
+knowledge_base/*
+!knowledge_base/.gitkeep
+
 # Caché de embeddings (modelos fastembed descargados en runtime)
 .fastembed_cache/
 
