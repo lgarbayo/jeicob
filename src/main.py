@@ -45,7 +45,7 @@ detalle completo de un paper específico.
 - search_references: buscar papers en fuentes académicas externas (Semantic \
 Scholar / arXiv) para DESCUBRIR literatura que aún no tienes en local.
 - download_reference: descargar a knowledge_base/ un PDF encontrado con \
-search_references (después indéxalo con ingest_corpus).
+search_references. Lo indexa automáticamente (no necesitas ingest_corpus después).
 - write_summary: escribir el reporte final en docs_output/. Un reporte SIEMPRE \
 lleva un abstract conciso seguido de una explicación completa del paper \
 (problema, metodología, resultados, limitaciones y relevancia clínica).
@@ -54,7 +54,7 @@ Directrices:
 - Cuando tengas información suficiente para actuar, actúa. No repreguntes lo ya \
 establecido ni enumeres opciones que no vas a seguir.
 - Para recopilar literatura nueva sigue este flujo: search_references → \
-download_reference → ingest_corpus → search_corpus/read_file → write_summary.
+download_reference (ya la indexa) → search_corpus/read_file → write_summary.
 - Cita las fuentes (nombre del documento) en reportes y respuestas.
 - Responde en español.
 """
@@ -168,15 +168,19 @@ def search_references(query: str, limit: int = 5) -> str:
 
 @beta_tool
 def download_reference(url: str, filename: str) -> str:
-    """Descarga un PDF (de search_references) a knowledge_base/.
-
-    Después usa ingest_corpus para indexarlo y poder consultarlo o resumirlo.
+    """Descarga un PDF (de search_references) a knowledge_base/ y lo indexa
+    automáticamente en la base vectorial. No necesitas llamar a ingest_corpus
+    después: ya queda consultable con search_corpus.
 
     Args:
         url: URL http(s) directa al PDF.
         filename: Nombre con el que guardarlo, p. ej. "kerbl2023.pdf".
     """
-    return references.download_reference(url, filename)
+    resultado = references.download_reference(url, filename)
+    if resultado.startswith("ERROR"):
+        return resultado
+    indexado = _get_rag().ingest_file(references.normalized_pdf_name(filename))
+    return f"{resultado}\n{indexado}"
 
 
 AGENT_TOOLS = [

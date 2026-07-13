@@ -205,7 +205,7 @@ Las **5 tools** que ve Claude:
 | `ingest_corpus()` | `rag.ingest_directory` | Indexar todo el corpus (una vez) |
 | `search_corpus(question)` | `rag.query` | Buscar por significado en el corpus |
 | `search_references(query)` | `references.search_references` | Descubrir papers en fuentes académicas externas |
-| `download_reference(url, filename)` | `references.download_reference` | Descargar un PDF encontrado a `knowledge_base/` |
+| `download_reference(url, filename)` | `references.download_reference` + RAG | Descargar un PDF a `knowledge_base/` **e indexarlo** |
 | `write_summary(...)` | `tools.write_summary` | Escribir el reporte final |
 
 ### 6.2. Las herramientas de sistema (`src/tools.py`)
@@ -274,12 +274,15 @@ dependencias ni API keys nuevas**.
   está limitado), **cae automáticamente a la API de arXiv** (muy fiable). Devuelve
   título, autores, año y la **URL de PDF descargable**.
 
-- **`download_reference(url, filename)`** → descarga un PDF a `knowledge_base/`.
-  **Confinado a esa carpeta** (mismo sandbox que `write_summary`: nombre base +
-  `.pdf`), solo acepta `http(s)`, **valida que sea un PDF** (cabecera `%PDF`) y
-  limita el tamaño a 50 MB. Tras descargar, se indexa con `ingest_corpus`.
+- **`download_reference(url, filename)`** → descarga un PDF a `knowledge_base/`
+  **y lo indexa automáticamente** en la base vectorial (no hace falta un
+  `ingest_corpus` aparte: queda consultable al instante). **Confinado a esa
+  carpeta** (mismo sandbox que `write_summary`: nombre base + `.pdf`), solo acepta
+  `http(s)`, **valida que sea un PDF** (cabecera `%PDF`) y limita el tamaño a 50 MB.
+  La descarga vive en `references.py` (desacoplada); el auto-indexado se compone en
+  el orquestador, que ya tiene el `RAGEngine` a mano.
 
-Flujo completo que habilita: **descubrir → descargar → indexar → recuperar →
+Flujo completo que habilita: **descubrir → descargar+indexar → recuperar →
 resumir**, todo autónomo. Disponible en las dos variantes (Claude y Ollama).
 
 ---

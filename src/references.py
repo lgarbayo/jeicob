@@ -37,6 +37,12 @@ _TIMEOUT = 45
 _ATOM = "{http://www.w3.org/2005/Atom}"
 
 
+def normalized_pdf_name(filename: str) -> str:
+    """Nombre base con extensión .pdf forzada (el mismo con el que se guarda)."""
+    base = Path(filename).name
+    return base if base.lower().endswith(".pdf") else base + ".pdf"
+
+
 def _http_get(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
@@ -159,11 +165,9 @@ def download_reference(url: str, filename: str) -> str:
     if not (url.startswith("http://") or url.startswith("https://")):
         return "ERROR: la URL debe empezar por http:// o https://."
 
-    nombre = Path(filename).name
-    if not nombre or nombre in {".", ".."}:
+    if not Path(filename).name or Path(filename).name in {".", ".."}:
         return f"ERROR: nombre de fichero inválido: '{filename}'."
-    if not nombre.lower().endswith(".pdf"):
-        nombre += ".pdf"
+    nombre = normalized_pdf_name(filename)
     try:
         destino = tools._resolve_within(tools.KNOWLEDGE_BASE_DIR, nombre)
     except ValueError as exc:
@@ -188,10 +192,7 @@ def download_reference(url: str, filename: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return f"ERROR al guardar '{nombre}': {exc}"
 
-    return (
-        f"Descargado '{nombre}' en knowledge_base/ ({len(datos) // 1024} KB). "
-        "Indéxalo con ingest_corpus para poder consultarlo o resumirlo."
-    )
+    return f"Descargado '{nombre}' en knowledge_base/ ({len(datos) // 1024} KB)."
 
 
 # --- Prueba de humo -----------------------------------------------------------

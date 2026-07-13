@@ -50,15 +50,15 @@ preguntas que cruzan varios documentos.
 - search_references: buscar papers en fuentes académicas externas (Semantic \
 Scholar / arXiv) para DESCUBRIR literatura que aún no tienes en local.
 - download_reference: descargar a knowledge_base/ un PDF encontrado con \
-search_references (después indéxalo con ingest_corpus).
+search_references. Lo indexa automáticamente (no necesitas ingest_corpus después).
 - write_summary: escribir el reporte final en docs_output/. Un reporte SIEMPRE \
 lleva un abstract conciso seguido de una explicación completa del paper \
 (problema, metodología, resultados, limitaciones y relevancia clínica).
 
 Directrices:
 - Cuando tengas información suficiente para actuar, actúa.
-- Para recopilar literatura nueva: search_references → download_reference → \
-ingest_corpus → search_corpus/read_file → write_summary.
+- Para recopilar literatura nueva: search_references → download_reference \
+(ya la indexa) → search_corpus/read_file → write_summary.
 - Cita las fuentes (nombre del documento) en reportes y respuestas.
 - Responde en español.
 """
@@ -73,6 +73,15 @@ def _get_rag() -> RAGEngine:
     if _rag is None:
         _rag = RAGEngine()
     return _rag
+
+
+def _download_and_index(url: str, filename: str) -> str:
+    """Descarga un PDF y, si va bien, lo indexa en la base vectorial."""
+    resultado = references.download_reference(url, filename)
+    if resultado.startswith("ERROR"):
+        return resultado
+    indexado = _get_rag().ingest_file(references.normalized_pdf_name(filename))
+    return f"{resultado}\n{indexado}"
 
 
 # --- Definición de tools para Ollama (JSON Schema + despacho) ------------------
@@ -159,7 +168,8 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "download_reference",
             "description": "Descarga a knowledge_base/ un PDF encontrado con "
-            "search_references. Después usa ingest_corpus para indexarlo.",
+            "search_references y lo indexa automáticamente (no necesitas "
+            "ingest_corpus después).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -208,7 +218,7 @@ DISPATCH = {
     "ingest_corpus": lambda: _get_rag().ingest_directory(),
     "search_corpus": lambda question: _get_rag().query(question),
     "search_references": lambda query, limit=5: references.search_references(query, limit),
-    "download_reference": lambda url, filename: references.download_reference(url, filename),
+    "download_reference": lambda url, filename: _download_and_index(url, filename),
     "write_summary": lambda **kw: tools.write_summary(**kw),
 }
 
