@@ -26,6 +26,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from . import references, tools
+from .prompts import SYSTEM_PROMPT
 from .rag import RAGEngine
 
 console = Console()
@@ -35,33 +36,6 @@ MODEL = os.getenv("JEICOB_LOCAL_MODEL", "qwen2.5:7b")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 MAX_TOOL_ITERS = 12  # tope de vueltas de tool por turno (evita bucles infinitos)
 
-SYSTEM_PROMPT = """\
-Eres jeicob, un agente de investigación autónomo especializado en literatura \
-científica sobre 3D Gaussian Splatting, el estándar DICOM y normativas clínicas.
-Tu objetivo es buscar, ingerir y sintetizar papers para producir reportes en Markdown.
-
-Herramientas:
-- read_directory: ver qué documentos hay en knowledge_base/.
-- ingest_corpus: indexar todos los documentos en la base vectorial. Hazlo una \
-vez antes de consultar el corpus.
-- search_corpus: búsqueda semántica sobre el corpus indexado. Úsala para \
-preguntas que cruzan varios documentos.
-- read_file: leer un documento concreto entero.
-- search_references: buscar papers en fuentes académicas externas (Semantic \
-Scholar / arXiv) para DESCUBRIR literatura que aún no tienes en local.
-- download_reference: descargar a knowledge_base/ un PDF encontrado con \
-search_references. Lo indexa automáticamente (no necesitas ingest_corpus después).
-- write_summary: escribir el reporte final en docs_output/. Un reporte SIEMPRE \
-lleva un abstract conciso seguido de una explicación completa del paper \
-(problema, metodología, resultados, limitaciones y relevancia clínica).
-
-Directrices:
-- Cuando tengas información suficiente para actuar, actúa.
-- Para recopilar literatura nueva: search_references → download_reference \
-(ya la indexa) → search_corpus/read_file → write_summary.
-- Cita las fuentes (nombre del documento) en reportes y respuestas.
-- Responde en español.
-"""
 
 # --- Motor RAG perezoso -------------------------------------------------------
 
@@ -99,15 +73,20 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Lee el contenido completo de un documento de "
-            "knowledge_base/ (PDF o texto/Markdown).",
+            "description": "Lee un documento de knowledge_base/ (PDF o "
+            "texto/Markdown), por tramos si es largo.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
                         "description": "Ruta del documento relativa a knowledge_base/.",
-                    }
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Carácter desde el que seguir leyendo "
+                        "(0 = inicio).",
+                    },
                 },
                 "required": ["path"],
             },
@@ -229,7 +208,7 @@ TOOL_SCHEMAS = [
 # Mapa nombre-de-tool -> función real (Fases 2 y 3).
 DISPATCH = {
     "read_directory": lambda: tools.read_directory(),
-    "read_file": lambda path: tools.read_file(path),
+    "read_file": lambda path, offset=0: tools.read_file(path, offset=int(offset)),
     "ingest_corpus": lambda: _get_rag().ingest_directory(),
     "search_corpus": lambda question: _get_rag().query(question),
     "search_references": lambda query, limit=5: references.search_references(

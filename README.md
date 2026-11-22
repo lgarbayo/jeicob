@@ -103,6 +103,16 @@ Variables de entorno (`.env`):
 | `ANTHROPIC_API_KEY` | — | **Obligatoria.** Tu clave de la API de Anthropic |
 | `JEICOB_MODEL` | `claude-opus-4-8` | Modelo de Claude a usar |
 | `QDRANT_PATH` | `./.qdrant_data` | Ruta de persistencia de la base vectorial |
+| `JEICOB_HOME` | raíz del repo | Base contra la que se resuelven las rutas relativas |
+| `JEICOB_KB_DIR` | `./knowledge_base` | Carpeta de documentos fuente |
+| `JEICOB_OUTPUT_DIR` | `./docs_output` | Carpeta donde se escriben los reportes |
+| `FASTEMBED_CACHE_PATH` | `./.fastembed_cache` | Caché del modelo de embeddings |
+
+Las rutas relativas se resuelven contra `JEICOB_HOME` (la raíz del repo), **no**
+contra el directorio desde el que lances el proceso (ver `src/config.py`).
+
+> **Tip:** `uv run python -m src.rag --prefetch` descarga el modelo de embeddings
+> (~0.22 GB) de antemano, para que la primera consulta no tenga que esperar.
 
 ---
 
@@ -201,8 +211,8 @@ Las **5 tools** que ve Claude:
 | Tool | Envuelve | Cuándo la usa el agente |
 |------|----------|-------------------------|
 | `read_directory()` | `tools.read_directory` | Descubrir qué documentos hay |
-| `read_file(path)` | `tools.read_file` | Leer un documento concreto entero |
-| `ingest_corpus()` | `rag.ingest_directory` | Indexar todo el corpus (una vez) |
+| `read_file(path, offset=0)` | `tools.read_file` | Leer un documento concreto (por tramos si es largo) |
+| `ingest_corpus()` | `rag.ingest_directory` | Sincronizar el índice con `knowledge_base/` (idempotente) |
 | `search_corpus(question)` | `rag.query` | Buscar por significado en el corpus |
 | `search_references(query)` | `references.search_references` | Descubrir papers en fuentes académicas externas |
 | `download_reference(url, filename)` | `references.download_reference` + RAG | Descargar un PDF a `knowledge_base/` **e indexarlo** |
@@ -217,11 +227,15 @@ reaccionar y reintentar.
 - **`read_directory()`** → lista (recursivamente) los ficheros de `knowledge_base/`
   con su tamaño, en rutas relativas listas para pasar a `read_file`.
 
-- **`read_file(path)`** → lee el contenido de un documento de `knowledge_base/`:
+- **`read_file(path, offset=0, max_chars=100_000)`** → lee un documento de `knowledge_base/`:
   - PDF vía `pypdf`; texto/Markdown (`.md`, `.markdown`, `.txt`, `.rst`) directo.
   - **Confinado a `knowledge_base/`** por el helper `_resolve_within`, que
     neutraliza *path traversal* (`../`), rutas absolutas y symlinks que escapen.
-  - Trunca a **100 000 caracteres** (`MAX_READ_CHARS`) para no desbordar el contexto.
+  - Lee **por tramos**: devuelve como mucho `max_chars` caracteres (tope
+    `MAX_READ_CHARS` = 100 000) a partir de `offset`; si queda texto, termina con
+    `[...continúa: ... offset=N ...]` para que el agente pida el siguiente tramo.
+    El texto extraído se cachea (por fichero, mtime y tamaño), así que paginar un
+    PDF no lo vuelve a parsear entero.
 
 - **`write_summary(filename, title, abstract, full_explanation, key_points=None,
   source=None)`** → escribe el reporte final. **Garantiza la estructura en el
@@ -246,11 +260,17 @@ Clase **`RAGEngine`** que encapsula Qdrant + embeddings.
      cortar ideas a mitad entre fragmentos.
   3. Crea la colección con la dimensión del modelo si no existe, y hace **`upsert`**
      de cada fragmento como `models.Document` (inferencia de embeddings **local**),
-     con metadatos por fragmento: `source` (fichero origen), `chunk` (índice) y
-     `document` (el texto).
+     con metadatos por fragmento: `source` (fichero origen), `chunk` (índice),
+     `document` (el texto) y `sha256` (hash del fichero).
+  - **Idempotente**: el id de cada fragmento es determinista
+    (`uuid5("<fuente>#<n>")`). Si el fichero no cambió (mismo SHA-256) no se
+    reprocesa; si cambió, se borran sus fragmentos antiguos y se reindexa; y
+    `ingest_directory` elimina del índice los documentos que ya no están en
+    `knowledge_base/`. `force=True` obliga a reindexar.
   - Reutiliza el sandbox de lectura de `tools.py` (misma frontera `knowledge_base/`).
 
-- **Consulta** (`query(question, top_k=5)`):
+- **Consulta** (`query(question, top_k=5, source=None)`; `source` limita la
+  búsqueda a un documento):
   - Vectoriza la pregunta y hace **`query_points`** contra la colección.
   - Devuelve los `top_k` fragmentos más relevantes con su **fuente** y su **score**
     de similitud (coseno) — recuperación transversal a todo el corpus, aunque la
@@ -338,6 +358,8 @@ jeicob/
 ├── .gitignore
 ├── src/
 │   ├── __init__.py
+│   ├── config.py           # rutas configurables por entorno
+│   ├── prompts.py          # system prompt compartido por los orquestadores
 │   ├── tools.py            # Fase 2 — tools de sistema (sandbox)
 │   ├── rag.py              # Fase 3 — motor RAG (Qdrant + fastembed)
 │   ├── references.py       # Recopilación de referencias (Semantic Scholar/arXiv)
@@ -355,7 +377,7 @@ Cada módulo trae una prueba de humo ejecutable:
 
 ```bash
 uv run python -m src.tools    # lista KB, valida escritura y sandbox
-uv run python -m src.rag      # ingesta + consulta end-to-end (descarga el modelo)
+uv run python -m src.rag      # ingesta idempotente + consulta end-to-end (descarga el modelo)
 ```
 
 ---

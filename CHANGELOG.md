@@ -8,7 +8,24 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- RAG ingestion is now idempotent: deterministic chunk ids plus a per-file
+  SHA-256 mean re-running `ingest_corpus` no longer duplicates chunks; changed
+  files are re-indexed and files removed from `knowledge_base/` are pruned.
+
+### Changed
+
+- `read_file` reads long documents in pages (`offset`, `max_chars`) and caches
+  extracted text.
+- Data paths are configurable via environment (`src/config.py`) and resolved
+  against the repo root instead of the working directory.
+- The fastembed model cache now lives in `.fastembed_cache/` instead of `/tmp`.
+- Single shared system prompt (`src/prompts.py`) for both orchestrators.
+
 ### Added
+
+- `python -m src.rag --prefetch` to download the embedding model ahead of time.
 
 - Autonomous research agent CLI with Claude tool calling (ReAct loop).
 - RAG engine using Qdrant (on-disk) and fastembed for local multilingual
