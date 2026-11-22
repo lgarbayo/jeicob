@@ -100,6 +100,7 @@ def write_summary(
     full_explanation: str,
     key_points: list[str] | None = None,
     source: str | None = None,
+    overwrite: bool = False,
 ) -> str:
     """Escribe el reporte final en Markdown dentro de docs_output/.
 
@@ -115,6 +116,8 @@ def write_summary(
             sustancialmente más extensa que el abstract.
         key_points: Lista opcional de puntos clave o hallazgos.
         source: Referencia opcional al documento fuente.
+        overwrite: True para reemplazar un reporte existente con ese nombre
+            (p. ej. al mejorar un reporte que ya escribiste).
     """
     return tools.write_summary(
         filename=filename,
@@ -123,6 +126,7 @@ def write_summary(
         full_explanation=full_explanation,
         key_points=key_points,
         source=source,
+        overwrite=overwrite,
     )
 
 

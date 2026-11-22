@@ -34,6 +34,10 @@ _TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".rst"}
 # Tope de caracteres por lectura, para no desbordar el contexto del LLM.
 MAX_READ_CHARS = 100_000
 
+# Tope de páginas al parsear un PDF: un PDF hostil o absurdo no puede dejar
+# al proceso (p. ej. el servidor MCP, de larga vida) parseando sin fin.
+MAX_PDF_PAGES = 3000
+
 
 # --- Utilidades internas de seguridad -----------------------------------------
 
@@ -72,6 +76,10 @@ def _extract(p: Path) -> str:
     sufijo = p.suffix.lower()
     if sufijo == ".pdf":
         lector = pypdf.PdfReader(str(p))
+        if len(lector.pages) > MAX_PDF_PAGES:
+            raise ValueError(
+                f"el PDF tiene {len(lector.pages)} páginas (máximo {MAX_PDF_PAGES})."
+            )
         return "\n".join(pagina.extract_text() or "" for pagina in lector.pages)
     if sufijo in _TEXT_SUFFIXES:
         return p.read_text(encoding="utf-8", errors="replace")
@@ -203,6 +211,7 @@ def write_summary(
     full_explanation: str,
     key_points: list[str] | None = None,
     source: str | None = None,
+    overwrite: bool = False,
 ) -> str:
     """Escribe un reporte estructurado en Markdown dentro de `docs_output/`.
 
@@ -233,6 +242,8 @@ def write_summary(
         key_points: Lista opcional de puntos clave o hallazgos destacados.
         source: Referencia opcional al documento fuente (fichero de
             `knowledge_base/`, DOI, etc.).
+        overwrite: Reemplazar un reporte que ya exista con ese nombre. Por
+            defecto no se sobrescribe y se devuelve un error.
 
     Returns:
         Confirmación con la ruta escrita, o un mensaje de error.
@@ -268,6 +279,11 @@ def write_summary(
         destino = _resolve_within(DOCS_OUTPUT_DIR, nombre_base)
     except ValueError as exc:
         return f"ERROR: {exc}"
+    if destino.exists() and not overwrite:
+        return (
+            f"ERROR: ya existe el reporte '{nombre_base}'. Usa overwrite=true para "
+            "reemplazarlo o elige otro nombre."
+        )
 
     # --- Ensamblado del reporte Markdown -------------------------------------
     partes: list[str] = [f"# {title.strip()}", ""]
@@ -311,6 +327,7 @@ if __name__ == "__main__":
             ),
             key_points=["Hallazgo A", "Hallazgo B"],
             source="_smoke_test.pdf",
+            overwrite=True,
         )
     )
 

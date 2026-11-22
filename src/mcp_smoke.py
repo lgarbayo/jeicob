@@ -102,7 +102,34 @@ async def _run(full: bool) -> None:
                 },
             )
             assert not r.is_error and (out / "escape.md").exists(), _text(r)
-            print("write_summary: validación y sandbox OK")
+            r = await c.call_tool(
+                "write_summary",
+                {
+                    "filename": "escape.md",
+                    "title": "DICOM",
+                    "abstract": "Resumen breve.",
+                    "full_explanation": "Otra explicación más larga que el abstract.",
+                },
+            )
+            assert r.is_error and "overwrite" in _text(r), _text(r)
+            print("write_summary: validación, sandbox y no sobrescritura OK")
+
+            # SSRF: ninguno de estos destinos llega a abrir conexión.
+            for url in (
+                "http://169.254.169.254/latest/meta-data/",
+                "http://127.0.0.1:6333/collections",
+                "http://[::1]/a.pdf",
+                "file:///etc/passwd",
+            ):
+                r = await c.call_tool(
+                    "download_reference", {"url": url, "filename": "x.pdf"}
+                )
+                assert r.is_error and (
+                    "no es una dirección pública" in _text(r)
+                    or "esquema no permitido" in _text(r)
+                ), (url, _text(r))
+            assert not (kb / "x.pdf").exists()
+            print("download_reference: protección SSRF OK")
 
             uris = {str(r.uri) for r in (await c.list_resources()).resources}
             assert uris == {

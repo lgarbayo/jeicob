@@ -227,8 +227,8 @@ Lo que ve el cliente:
 | `ingest_corpus(force=False)` | Idempotente; envía notificaciones de progreso por documento |
 | `search_corpus(question, top_k=5, source=None)` | Solo lectura; `source` limita a un documento |
 | `search_references(query, limit=5)` | Red (Semantic Scholar / arXiv) |
-| `download_reference(url, filename)` | Red; descarga e indexa |
-| `write_summary(...)` | Escribe en `docs_output/` (sobrescribe si existe) |
+| `download_reference(url, filename)` | Red; descarga e indexa; nunca sobrescribe; protección SSRF |
+| `write_summary(..., overwrite=False)` | Escribe en `docs_output/`; solo reemplaza con `overwrite=true` |
 
 Además de tools, el servidor ofrece **resources** y **prompts**:
 
@@ -264,6 +264,11 @@ Variables propias del servidor:
 | `JEICOB_QDRANT_IDLE_RELEASE` | `30` | Segundos sin uso antes de liberar el lock de Qdrant |
 | `JEICOB_QDRANT_LOCK_TIMEOUT` | `10` | Segundos esperando si otro proceso tiene el lock |
 | `JEICOB_MCP_PREFETCH` | `1` | Descarga el modelo de embeddings en segundo plano al arrancar |
+| `JEICOB_DOWNLOAD_ALLOWED_HOSTS` | — | Si se define (p. ej. `arxiv.org,semanticscholar.org`), solo esos dominios son descargables |
+| `JEICOB_ALLOW_PRIVATE_NETWORK` | `0` | `1` permite descargar de IPs privadas (repositorios en la intranet) |
+
+El servidor escribe en stderr un **log de auditoría** por cada tool, resource o
+prompt usado (nombre, `ok`/`error`, duración), sin argumentos ni contenido.
 
 > **Privacidad:** con MCP, lo que lean las tools (documentos, fragmentos) va al
 > LLM de tu cliente. Si `knowledge_base/` contiene datos clínicos, ten en cuenta
@@ -392,7 +397,9 @@ dependencias ni API keys nuevas**.
   **y lo indexa automáticamente** en la base vectorial (no hace falta un
   `ingest_corpus` aparte: queda consultable al instante). **Confinado a esa
   carpeta** (mismo sandbox que `write_summary`: nombre base + `.pdf`), solo acepta
-  `http(s)`, **valida que sea un PDF** (cabecera `%PDF`) y limita el tamaño a 50 MB.
+  `http(s)` hacia **IPs públicas** (protección SSRF de `netguard.py`, ver §8),
+  **valida que sea un PDF** (cabecera `%PDF`), limita el tamaño a 50 MB y **no
+  sobrescribe** un fichero existente.
   La descarga vive en `references.py` (desacoplada); el auto-indexado se compone en
   el orquestador, que ya tiene el `RAGEngine` a mano.
 
@@ -435,7 +442,21 @@ tool); "Fuente" y "Puntos clave" son opcionales.
 - **Lectura** confinada a `knowledge_base/`; **escritura** confinada a `docs_output/`.
   Ambas pasan por `_resolve_within`, que resuelve la ruta y comprueba que no escape
   del directorio permitido (bloquea `../`, rutas absolutas y symlinks).
-- `write_summary` además reduce el nombre de fichero a su base y fuerza `.md`.
+- `write_summary` además reduce el nombre de fichero a su base, fuerza `.md` y no
+  sobrescribe un reporte existente salvo con `overwrite=true`.
+- **Descargas** (`src/netguard.py`): solo `http`/`https`; el host debe resolver a
+  IPs **públicas** (se rechazan loopback, redes privadas, link-local como
+  `169.254.169.254`…), y la IP se vuelve a comprobar en el socket ya conectado,
+  antes del TLS, para que el *DNS rebinding* no sirva. Cada redirección (máx. 5)
+  se revalida, no se usan proxies del entorno y se puede restringir a una lista
+  de dominios (`JEICOB_DOWNLOAD_ALLOWED_HOSTS`). El fichero debe empezar por la
+  cabecera `%PDF`, pesar ≤ 50 MB y **no sobrescribe** nada de `knowledge_base/`.
+- **PDFs**: como mucho 3000 páginas por documento, para que un PDF hostil no deje
+  al servidor parseando sin fin.
+- **Tools de red desactivables** en el servidor MCP (`JEICOB_ENABLE_NETWORK=0`):
+  imprescindible si `knowledge_base/` contiene datos clínicos, porque la
+  combinación "datos privados + contenido no confiable (PDFs descargados) + salida
+  a internet" permite exfiltrar datos con una inyección de prompt.
 - Las claves y datos locales (`.env`, `.qdrant_data/`, `.venv/`) están en
   `.gitignore` y nunca se versionan.
 
@@ -457,6 +478,7 @@ jeicob/
 │   ├── tools.py            # Fase 2 — tools de sistema (sandbox)
 │   ├── rag.py              # Fase 3 — motor RAG (Qdrant + fastembed)
 │   ├── references.py       # Recopilación de referencias (Semantic Scholar/arXiv)
+│   ├── netguard.py         # HTTP saliente con protección SSRF
 │   ├── main.py             # Fase 4 — orquestador CLI con Claude (ReAct)
 │   ├── main_local.py       # Variante local gratuita con Ollama (§5.1)
 │   ├── mcp_server.py       # Servidor MCP stdio (§5.2)

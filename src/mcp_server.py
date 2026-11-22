@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from .rag import RAGEngine
 
 log = logging.getLogger("jeicob.mcp")
+audit_log = logging.getLogger("jeicob.audit")
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -284,7 +285,52 @@ class JeicobServer(MCPServer):
         return recursos
 
 
-mcp = JeicobServer("jeicob", instructions=INSTRUCTIONS, lifespan=_lifespan)
+_AUDITED = {"tools/call", "resources/read", "prompts/get"}
+
+
+async def _audit(ctx: Any, call_next: Callable) -> Any:
+    """Log de auditoría a stderr: qué se usó, con qué resultado y cuánto tardó.
+
+    Nunca registra argumentos ni contenido (consultas, rutas de documentos,
+    texto): pueden contener datos clínicos. De un resource solo se anota el
+    tipo (knowledge / reports).
+    """
+    metodo = getattr(ctx, "method", None)
+    if metodo not in _AUDITED:
+        return await call_next(ctx)
+    params = getattr(ctx, "params", None)
+    params = params if isinstance(params, dict) else {}
+    if metodo == "resources/read":
+        uri = str(params.get("uri", ""))
+        objetivo = uri.split("/")[2] if uri.startswith("jeicob://") else "?"
+    else:
+        objetivo = str(params.get("name", "?"))
+    inicio = time.monotonic()
+    estado = "ok"
+    try:
+        resultado = await call_next(ctx)
+        es_error = getattr(resultado, "is_error", None)
+        if es_error is None and isinstance(resultado, dict):
+            es_error = resultado.get("isError")
+        if es_error:
+            estado = "error"
+        return resultado
+    except BaseException:
+        estado = "error"
+        raise
+    finally:
+        audit_log.info(
+            "%s %s %s %.0fms",
+            metodo,
+            objetivo,
+            estado,
+            (time.monotonic() - inicio) * 1000,
+        )
+
+
+mcp = JeicobServer(
+    "jeicob", instructions=INSTRUCTIONS, lifespan=_lifespan, middleware=[_audit]
+)
 
 _READ_ONLY = ToolAnnotations(
     readOnlyHint=True, idempotentHint=True, openWorldHint=False
@@ -349,7 +395,7 @@ def read_file(path: str, offset: int = 0, max_chars: int = MCP_READ_CHARS) -> st
     title="Escribir reporte",
     annotations=ToolAnnotations(
         readOnlyHint=False,
-        destructiveHint=True,  # sobrescribe un reporte con el mismo nombre
+        destructiveHint=True,  # con overwrite=true reemplaza un reporte
         idempotentHint=True,
         openWorldHint=False,
     ),
@@ -363,6 +409,7 @@ async def write_summary(
     full_explanation: str,
     key_points: list[str] | None = None,
     source: str | None = None,
+    overwrite: bool = False,
 ) -> str:
     """Escribe el reporte final en Markdown dentro de docs_output/.
 
@@ -378,6 +425,8 @@ async def write_summary(
         full_explanation: Explicación completa y detallada del paper.
         key_points: Puntos clave o hallazgos destacados (opcional).
         source: Documento fuente, DOI o URL (opcional).
+        overwrite: True para reemplazar un reporte que ya exista con ese
+            nombre (p. ej. al mejorar un reporte). Por defecto no sobrescribe.
     """
     resultado = _ok(
         await asyncio.to_thread(
@@ -388,6 +437,7 @@ async def write_summary(
             full_explanation=full_explanation,
             key_points=key_points,
             source=source,
+            overwrite=overwrite,
         )
     )
     await _notify_resources_changed(ctx)
@@ -490,8 +540,8 @@ if NETWORK_ENABLED:
         title="Descargar referencia",
         annotations=ToolAnnotations(
             readOnlyHint=False,
-            destructiveHint=True,  # sobrescribe un PDF con el mismo nombre
-            idempotentHint=True,
+            destructiveHint=False,  # nunca sobrescribe un fichero existente
+            idempotentHint=False,
             openWorldHint=True,
         ),
         structured_output=False,

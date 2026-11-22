@@ -12,23 +12,23 @@ Fuentes (sin API key):
 
 Solo depende de la librería estándar (urllib + json + xml): sin dependencias
 nuevas. La descarga se confina a `knowledge_base/` (reutiliza el sandbox de
-tools.py), acepta solo http(s), valida que sea un PDF y limita el tamaño.
+tools.py), valida que sea un PDF, limita el tamaño y no sobrescribe ficheros
+existentes. Todo el tráfico saliente pasa por `netguard.py` (protección SSRF:
+solo http(s) y solo IPs públicas, también tras redirecciones).
 """
 
 from __future__ import annotations
 
 import json
-import urllib.error
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from . import tools
+from . import netguard, tools
 
 _S2_SEARCH = "https://api.semanticscholar.org/graph/v1/paper/search"
 _S2_FIELDS = "title,authors,year,externalIds,openAccessPdf"
-_ARXIV_SEARCH = "http://export.arxiv.org/api/query"
+_ARXIV_SEARCH = "https://export.arxiv.org/api/query"
 _USER_AGENT = "jeicob-research-agent/0.1 (+https://github.com/lgarbayo/jeicob)"
 _MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
 _TIMEOUT = 45
@@ -44,8 +44,9 @@ def normalized_pdf_name(filename: str) -> str:
 
 
 def _http_get(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+    with netguard.open_url(
+        url, headers={"User-Agent": _USER_AGENT}, timeout=_TIMEOUT
+    ) as resp:
         return resp.read()
 
 
@@ -144,7 +145,7 @@ def search_references(query: str, limit: int = 5) -> str:
         referencias = _search_semantic_scholar(query, limit)
         if referencias:
             return _formatear(query, referencias)
-    except Exception:  # noqa: BLE001 — cae a arXiv ante cualquier fallo (incl. 429)
+    except Exception:  # noqa: BLE001, S110 — cae a arXiv ante cualquier fallo (incl. 429)
         pass
     try:
         return _formatear(query, _search_arxiv(query, limit))
@@ -162,34 +163,50 @@ def download_reference(url: str, filename: str) -> str:
     Returns:
         Confirmación con el tamaño descargado, o un mensaje de error. Tras esto,
         usa `ingest_corpus` para indexarlo.
-    """
-    if not (url.startswith("http://") or url.startswith("https://")):
-        return "ERROR: la URL debe empezar por http:// o https://."
 
-    if not Path(filename).name or Path(filename).name in {".", ".."}:
+    Nunca sobrescribe: si ya existe un fichero con ese nombre en
+    knowledge_base/ devuelve un error (así una descarga no puede reemplazar un
+    documento legítimo del corpus).
+    """
+    try:
+        netguard.check_url(url)
+    except netguard.BlockedDestinationError as exc:
+        return f"ERROR: URL no permitida: {exc}"
+
+    base = Path(filename).name
+    if not base or base in {".", ".."} or base.startswith("."):
         return f"ERROR: nombre de fichero inválido: '{filename}'."
     nombre = normalized_pdf_name(filename)
     try:
         destino = tools._resolve_within(tools.KNOWLEDGE_BASE_DIR, nombre)
     except ValueError as exc:
         return f"ERROR: {exc}"
+    if destino.exists():
+        return (
+            f"ERROR: ya existe '{nombre}' en knowledge_base/; no se sobrescribe. "
+            "Si es el mismo paper ya lo tienes; si no, usa otro nombre."
+        )
 
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            content_type = resp.headers.get("Content-Type", "")
+        with netguard.open_url(
+            url, headers={"User-Agent": _USER_AGENT}, timeout=_TIMEOUT
+        ) as resp:
             datos = resp.read(_MAX_PDF_BYTES + 1)
     except Exception as exc:  # noqa: BLE001
         return f"ERROR al descargar '{url}': {exc}"
 
     if len(datos) > _MAX_PDF_BYTES:
         return f"ERROR: el fichero supera el límite de {_MAX_PDF_BYTES // (1024 * 1024)} MB."
-    if not datos.startswith(b"%PDF") and "pdf" not in content_type.lower():
+    # La cabecera %PDF manda (Content-Type lo decide el servidor remoto).
+    if b"%PDF-" not in datos[:1024]:
         return "ERROR: la URL no devolvió un PDF (¿es una página web en vez del PDF?)."
 
     try:
         tools.KNOWLEDGE_BASE_DIR.mkdir(parents=True, exist_ok=True)
-        destino.write_bytes(datos)
+        with destino.open("xb") as f:  # "x": falla si alguien lo creó entretanto
+            f.write(datos)
+    except FileExistsError:
+        return f"ERROR: ya existe '{nombre}' en knowledge_base/; no se sobrescribe."
     except Exception as exc:  # noqa: BLE001
         return f"ERROR al guardar '{nombre}': {exc}"
 

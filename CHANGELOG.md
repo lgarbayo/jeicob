@@ -8,6 +8,19 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- Outbound HTTP goes through `src/netguard.py`: http(s) only, public IPs only
+  (checked on DNS resolution and again on the connected socket, defeating DNS
+  rebinding), every redirect re-validated, no environment proxies, optional
+  host allowlist (`JEICOB_DOWNLOAD_ALLOWED_HOSTS`).
+- `download_reference` never overwrites files in `knowledge_base/`, rejects
+  hidden file names and requires a `%PDF` header; arXiv search uses https.
+- `write_summary` no longer overwrites an existing report unless
+  `overwrite=true`.
+- PDFs over 3000 pages are rejected.
+- MCP server audit log (tool/resource/prompt, outcome, duration; no content).
+
 ### Fixed
 
 - RAG ingestion is now idempotent: deterministic chunk ids plus a per-file

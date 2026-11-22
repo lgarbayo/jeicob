@@ -198,6 +198,11 @@ TOOL_SCHEMAS = [
                         "type": "string",
                         "description": "Documento fuente (opcional).",
                     },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "true para reemplazar un reporte existente "
+                        "con ese nombre.",
+                    },
                 },
                 "required": ["filename", "title", "abstract", "full_explanation"],
             },
