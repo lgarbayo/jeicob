@@ -44,6 +44,7 @@ cp .env.example .env
 # Run the smoke tests for each module
 uv run python -m src.tools
 uv run python -m src.rag
+uv run --extra mcp python -m src.mcp_smoke
 ```
 
 ---

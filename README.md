@@ -177,6 +177,84 @@ un *tool runner*, `main_local.py` implementa el bucle ReAct a mano.
 |----------|---------|-------|---------|------------|
 | Claude | `src/main.py` | De pago (API key) | Alta | Datos van a la API |
 | Ollama | `src/main_local.py` | **Gratis** | Media | **100% local** |
+| Servidor MCP | `src/mcp_server.py` | El de tu cliente MCP | La del modelo del cliente | Datos van al LLM del cliente |
+
+### 5.2. Como servidor MCP (Claude Code, Claude Desktop…)
+
+`src/mcp_server.py` expone las mismas tools por el
+[Model Context Protocol](https://modelcontextprotocol.io), de modo que **el
+"cerebro" pasa a ser tu cliente MCP** (Claude Code, Claude Desktop u otro): no
+necesitas `ANTHROPIC_API_KEY` ni el bucle de `main.py`. Reutiliza sin cambios
+`tools.py`, `rag.py` y `references.py`.
+
+```bash
+# Instala el extra opcional `mcp` (SDK oficial de MCP)
+uv sync --extra mcp
+
+# Recomendado: descarga el modelo de embeddings antes de la primera consulta
+uv run python -m src.rag --prefetch
+```
+
+**Claude Code** — el repo ya trae un `.mcp.json` con el servidor `jeicob`. Abre
+`claude` en la raíz del repo, aprueba el servidor cuando te lo pida y comprueba
+con `/mcp` que está conectado. Desde cualquier otro directorio:
+
+```bash
+claude mcp add jeicob -- uv --directory /ruta/absoluta/a/jeicob run --extra mcp python -m src.mcp_server
+```
+
+**Claude Desktop** — añade a `claude_desktop_config.json` (Desktop no hereda el
+`PATH` de tu shell, así que usa la ruta absoluta de `uv`; `which uv`):
+
+```json
+{
+  "mcpServers": {
+    "jeicob": {
+      "command": "/ruta/absoluta/a/uv",
+      "args": ["--directory", "/ruta/absoluta/a/jeicob", "run", "--extra", "mcp",
+               "python", "-m", "src.mcp_server"]
+    }
+  }
+}
+```
+
+Lo que ve el cliente:
+
+| Tool | Notas MCP |
+|------|-----------|
+| `read_directory` | Solo lectura |
+| `read_file(path, offset=0, max_chars=20000)` | Solo lectura; tramos de 20 000 caracteres para no superar el límite de salida del cliente |
+| `ingest_corpus(force=False)` | Idempotente; envía notificaciones de progreso por documento |
+| `search_corpus(question, top_k=5, source=None)` | Solo lectura; `source` limita a un documento |
+| `search_references(query, limit=5)` | Red (Semantic Scholar / arXiv) |
+| `download_reference(url, filename)` | Red; descarga e indexa |
+| `write_summary(...)` | Escribe en `docs_output/` (sobrescribe si existe) |
+
+Cada tool declara sus *annotations* MCP (`readOnlyHint`, `destructiveHint`,
+`openWorldHint`…), que el cliente usa para decidir cuándo pedirte confirmación,
+y los errores llegan como `isError` para que el modelo los corrija.
+
+**Concurrencia con el CLI.** Qdrant en modo local bloquea `.qdrant_data/` para un
+único proceso. El servidor abre la base solo cuando una tool la necesita y la
+**libera tras 30 s sin uso**, así que puedes alternar entre el servidor MCP y
+`src.main`. Si otro proceso la tiene abierta, la tool espera unos segundos y
+devuelve un error claro. Usarlos *a la vez* requiere Qdrant en servidor.
+
+Variables propias del servidor:
+
+| Variable | Por defecto | Descripción |
+|----------|-------------|-------------|
+| `JEICOB_ENABLE_NETWORK` | `1` | `0` oculta `search_references` y `download_reference` (sin salida a internet) |
+| `JEICOB_QDRANT_IDLE_RELEASE` | `30` | Segundos sin uso antes de liberar el lock de Qdrant |
+| `JEICOB_QDRANT_LOCK_TIMEOUT` | `10` | Segundos esperando si otro proceso tiene el lock |
+| `JEICOB_MCP_PREFETCH` | `1` | Descarga el modelo de embeddings en segundo plano al arrancar |
+
+> **Privacidad:** con MCP, lo que lean las tools (documentos, fragmentos) va al
+> LLM de tu cliente. Si `knowledge_base/` contiene datos clínicos, ten en cuenta
+> a dónde envía los datos ese cliente; la garantía "nada sale de tu máquina" solo
+> la da `main_local.py`.
+
+Para depurar a mano: `npx @modelcontextprotocol/inspector uv run --extra mcp python -m src.mcp_server`.
 
 ---
 
@@ -364,7 +442,10 @@ jeicob/
 │   ├── rag.py              # Fase 3 — motor RAG (Qdrant + fastembed)
 │   ├── references.py       # Recopilación de referencias (Semantic Scholar/arXiv)
 │   ├── main.py             # Fase 4 — orquestador CLI con Claude (ReAct)
-│   └── main_local.py       # Variante local gratuita con Ollama (§5.1)
+│   ├── main_local.py       # Variante local gratuita con Ollama (§5.1)
+│   ├── mcp_server.py       # Servidor MCP stdio (§5.2)
+│   └── mcp_smoke.py        # Prueba de humo del servidor MCP
+├── .mcp.json               # registro del servidor MCP para Claude Code
 ├── knowledge_base/         # entrada: papers a analizar
 └── docs_output/            # salida: reportes Markdown
 ```
@@ -378,6 +459,8 @@ Cada módulo trae una prueba de humo ejecutable:
 ```bash
 uv run python -m src.tools    # lista KB, valida escritura y sandbox
 uv run python -m src.rag      # ingesta idempotente + consulta end-to-end (descarga el modelo)
+uv run --extra mcp python -m src.mcp_smoke         # servidor MCP por stdio (sin modelo)
+uv run --extra mcp python -m src.mcp_smoke --full  # + RAG, progreso y lock de Qdrant
 ```
 
 ---

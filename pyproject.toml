@@ -11,3 +11,8 @@ dependencies = [
     "qdrant-client[fastembed]>=1.18.0",
     "rich>=15.0.0",
 ]
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=2.3,<3",
+]

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "jeicob": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--extra", "mcp", "--frozen", "python", "-m", "src.mcp_server"],
+      "env": {}
+    }
+  }
+}

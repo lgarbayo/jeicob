@@ -25,6 +25,14 @@ and this project adheres to
 
 ### Added
 
+- MCP server (`src/mcp_server.py`, stdio, official `mcp` SDK 2.x as the
+  optional `mcp` extra) exposing the seven research tools to Claude Code,
+  Claude Desktop and other MCP clients, with tool annotations, `isError`
+  results, ingestion progress notifications, and a single-threaded Qdrant
+  owner that releases the on-disk lock when idle.
+- `.mcp.json` registering the server for Claude Code, and a stdio smoke test
+  (`python -m src.mcp_smoke`) run in CI.
+- `JEICOB_ENABLE_NETWORK=0` to run the MCP server without internet tools.
 - `python -m src.rag --prefetch` to download the embedding model ahead of time.
 
 - Autonomous research agent CLI with Claude tool calling (ReAct loop).
