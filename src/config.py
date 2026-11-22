@@ -29,6 +29,16 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Carga el `.env` del repo ANTES de leer las rutas: si no, un QDRANT_PATH o
+# JEICOB_KB_DIR definidos en `.env` se ignorarían (los orquestadores llaman a
+# load_dotenv() después de importar este módulo). No pisa el entorno real.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(_REPO_ROOT / ".env", override=False)
+except ImportError:  # pragma: no cover — python-dotenv es dependencia base
+    pass
+
 
 def _resolve(value: str | None, default: Path, base: Path) -> Path:
     """Convierte una ruta de entorno en absoluta (relativa a `base`)."""

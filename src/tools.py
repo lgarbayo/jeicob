@@ -67,11 +67,8 @@ def _display(ruta: Path) -> str:
 # --- Extracción de texto (compartida con rag.py) ------------------------------
 
 
-@lru_cache(maxsize=8)
-def _extract_cached(ruta: str, _mtime_ns: int, _size: int) -> str:
-    """Extrae el texto de un fichero. La clave incluye mtime y tamaño para que
-    la caché se invalide sola si el fichero cambia."""
-    p = Path(ruta)
+def _extract(p: Path) -> str:
+    """Extrae el texto de un PDF o fichero de texto (sin caché)."""
     sufijo = p.suffix.lower()
     if sufijo == ".pdf":
         lector = pypdf.PdfReader(str(p))
@@ -84,12 +81,23 @@ def _extract_cached(ruta: str, _mtime_ns: int, _size: int) -> str:
     )
 
 
-def extract_text(ruta: Path) -> str:
+@lru_cache(maxsize=8)
+def _extract_cached(ruta: str, _mtime_ns: int, _size: int) -> str:
+    """`_extract` cacheado. La clave incluye mtime y tamaño para que la caché
+    se invalide sola si el fichero cambia."""
+    return _extract(Path(ruta))
+
+
+def extract_text(ruta: Path, use_cache: bool = True) -> str:
     """Texto completo (sin truncar) de un PDF o fichero de texto.
 
     Cachea las últimas extracciones: leer un PDF por páginas (`read_file` con
-    `offset`) no vuelve a parsearlo entero en cada llamada.
+    `offset`) no vuelve a parsearlo entero en cada llamada. La ingesta usa
+    `use_cache=False`, porque mtime+tamaño no garantizan que el contenido sea
+    el mismo (p. ej. `cp -p` o sistemas de ficheros con mtime grueso).
     """
+    if not use_cache:
+        return _extract(ruta)
     st = ruta.stat()
     return _extract_cached(str(ruta), st.st_mtime_ns, st.st_size)
 

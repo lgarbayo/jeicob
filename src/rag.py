@@ -26,6 +26,7 @@ a Qdrant en servidor (Docker) sin cambiar esta interfaz.
 from __future__ import annotations
 
 import hashlib
+import os
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -61,6 +62,15 @@ def _sha256(ruta: Path) -> str:
         for bloque in iter(lambda: f.read(1 << 20), b""):
             h.update(bloque)
     return h.hexdigest()
+
+
+def _is_ingestible_rel(rel: str) -> bool:
+    """Regla única de qué se ingiere: extensión soportada y ningún componente
+    de la ruta oculto (empieza por '.')."""
+    partes = Path(rel).parts
+    if not partes or any(p.startswith(".") for p in partes):
+        return False
+    return Path(rel).suffix.lower() in _INGESTIBLE_SUFFIXES
 
 
 def _source_filter(source: str) -> models.Filter:
@@ -148,13 +158,14 @@ class RAGEngine:
         if not self.kb_dir.exists():
             return rutas
         for ruta in sorted(self.kb_dir.rglob("*")):
-            if ruta.is_dir() or ruta.name.startswith("."):
+            if ruta.is_dir():
                 continue
-            if ruta.suffix.lower() not in _INGESTIBLE_SUFFIXES:
+            rel = str(ruta.relative_to(self.kb_dir))
+            if not _is_ingestible_rel(rel):
                 continue
             if not tools._is_within(self.kb_dir, ruta):
                 continue  # symlink que sale del sandbox
-            rutas.append(str(ruta.relative_to(self.kb_dir)))
+            rutas.append(rel)
         return rutas
 
     def indexed_sources(self) -> set[str]:
@@ -197,7 +208,15 @@ class RAGEngine:
         if not ruta.is_file():
             return f"ERROR: '{filename}' no existe en knowledge_base/."
 
-        rel = str(ruta.relative_to(self.kb_dir))
+        # Clave del documento = ruta relativa *tal como aparece* en la KB (sin
+        # seguir symlinks), la misma que usa list_ingestible(): así un enlace y
+        # la poda de ingest_directory nunca discrepan.
+        rel = os.path.relpath(os.path.normpath(self.kb_dir / filename), self.kb_dir)
+        if not _is_ingestible_rel(rel):
+            return (
+                f"ERROR: '{filename}' no es ingerible (ficheros ocultos o formato "
+                "no soportado; válidos: .pdf, .md, .markdown, .txt, .rst)."
+            )
         try:
             sha = _sha256(ruta)
         except OSError as exc:
@@ -209,7 +228,7 @@ class RAGEngine:
             return f"Sin cambios '{rel}': ya estaba indexado ({n} fragmentos)."
 
         try:
-            texto = tools.extract_text(ruta)
+            texto = tools.extract_text(ruta, use_cache=False)
         except Exception as exc:  # noqa: BLE001
             return f"ERROR al leer '{filename}': {exc}"
 
@@ -245,6 +264,13 @@ class RAGEngine:
             progress: Callback opcional `(i, total, fichero)` llamado antes de
                 procesar cada documento.
         """
+        if not self.kb_dir.is_dir():
+            # Sin esto, una KB inexistente (variable mal escrita, volumen sin
+            # montar) parecería "se han borrado todos" y vaciaría el índice.
+            return (
+                f"ERROR: la carpeta de documentos {self.kb_dir} no existe o no es "
+                "un directorio; no se modifica el índice."
+            )
         ficheros = self.list_ingestible()
         resultados: list[str] = []
         for i, rel in enumerate(ficheros):
@@ -373,6 +399,24 @@ if __name__ == "__main__":
             a.unlink()
             print(rag.ingest_directory())
             assert rag.indexed_sources() == {"b.txt"}
+
+            # Ocultos rechazados; un symlink se indexa con su propio nombre y
+            # la poda no lo borra.
+            (kb / ".oculto.md").write_text("Notas privadas.", encoding="utf-8")
+            assert rag.ingest_file(".oculto.md").startswith("ERROR")
+            (kb / "enlace.md").symlink_to(".oculto.md")
+            print(rag.ingest_directory())
+            assert rag.indexed_sources() == {"b.txt", "enlace.md"}
+            print(rag.ingest_directory())
+            assert rag.indexed_sources() == {"b.txt", "enlace.md"}
+
+            # Una KB inexistente NO vacía el índice.
+            antes = rag.count()
+            rag_typo = rag.kb_dir
+            rag.kb_dir = Path(tmp) / "no_existe"
+            assert rag.ingest_directory().startswith("ERROR")
+            assert rag.count() == antes, "una KB inexistente ha vaciado el índice"
+            rag.kb_dir = rag_typo
 
             print("\n--- Consulta: '¿qué es el estándar DICOM?' ---")
             print(rag.query("¿qué es el estándar DICOM?", top_k=2, source="b.txt"))

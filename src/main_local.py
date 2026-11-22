@@ -208,11 +208,11 @@ TOOL_SCHEMAS = [
 # Mapa nombre-de-tool -> función real (Fases 2 y 3).
 DISPATCH = {
     "read_directory": lambda: tools.read_directory(),
-    "read_file": lambda path, offset=0: tools.read_file(path, offset=int(offset)),
+    "read_file": lambda path, offset=0: tools.read_file(path, offset=int(offset or 0)),
     "ingest_corpus": lambda: _get_rag().ingest_directory(),
     "search_corpus": lambda question: _get_rag().query(question),
     "search_references": lambda query, limit=5: references.search_references(
-        query, limit
+        query, int(limit or 5)
     ),
     "download_reference": lambda url, filename: _download_and_index(url, filename),
     "write_summary": lambda **kw: tools.write_summary(**kw),
