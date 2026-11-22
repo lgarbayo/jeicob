@@ -30,6 +30,10 @@ and this project adheres to
   Claude Desktop and other MCP clients, with tool annotations, `isError`
   results, ingestion progress notifications, and a single-threaded Qdrant
   owner that releases the on-disk lock when idle.
+- MCP resources (`jeicob://knowledge/{+path}`, `jeicob://reports/{name}`)
+  listed live from disk, prompts (`research_report`, `summarize_document`,
+  `ask_corpus`), argument completion, and resource list-changed
+  notifications.
 - `.mcp.json` registering the server for Claude Code, and a stdio smoke test
   (`python -m src.mcp_smoke`) run in CI.
 - `JEICOB_ENABLE_NETWORK=0` to run the MCP server without internet tools.

@@ -230,6 +230,22 @@ Lo que ve el cliente:
 | `download_reference(url, filename)` | Red; descarga e indexa |
 | `write_summary(...)` | Escribe en `docs_output/` (sobrescribe si existe) |
 
+Además de tools, el servidor ofrece **resources** y **prompts**:
+
+| Tipo | Nombre | Qué es |
+|------|--------|--------|
+| Resource | `jeicob://knowledge/{+path}` | Texto extraído de cada documento de `knowledge_base/` (hasta 60 000 caracteres; para el resto, `read_file` con `offset`) |
+| Resource | `jeicob://reports/{name}` | Cada reporte Markdown de `docs_output/` |
+| Prompt | `research_report(topic, filename?)` | Flujo completo: corpus → fuentes externas → lectura → reporte |
+| Prompt | `summarize_document(path)` | Reporte completo de un documento concreto |
+| Prompt | `ask_corpus(question)` | Respuesta citada usando solo el corpus |
+
+En Claude Code los resources se adjuntan con `@jeicob:` y los prompts aparecen
+como comandos `/mcp__jeicob__research_report`, etc. Los argumentos `path` y
+`name` se autocompletan con los ficheros existentes, y el listado de resources se
+actualiza (con notificación al cliente) cuando `download_reference` o
+`write_summary` añaden un fichero.
+
 Cada tool declara sus *annotations* MCP (`readOnlyHint`, `destructiveHint`,
 `openWorldHint`…), que el cliente usa para decidir cuándo pedirte confirmación,
 y los errores llegan como `isError` para que el modelo los corrija.

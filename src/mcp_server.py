@@ -36,14 +36,26 @@ import os
 import sys
 import threading
 import time
+import urllib.parse
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mcp.server.mcpserver import Context, MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
-from mcp.types import ToolAnnotations
+from mcp.server.mcpserver.exceptions import (
+    ResourceError,
+    ResourceNotFoundError,
+    ToolError,
+)
+from mcp.types import (
+    Completion,
+    PromptReference,
+    ResourceTemplateReference,
+    ToolAnnotations,
+)
+from mcp.types import Resource as MCPResource
 
 from . import config, prompts, references, tools
 
@@ -210,11 +222,94 @@ Markdown.
 Formato de los reportes: {prompts.REPORT_RULES}
 """
 
-mcp = MCPServer("jeicob", instructions=INSTRUCTIONS, lifespan=_lifespan)
+KNOWLEDGE_URI = "jeicob://knowledge/"
+REPORTS_URI = "jeicob://reports/"
+
+# Un resource lo adjunta el usuario entero (p. ej. una mención @ en Claude
+# Code), así que se permite más que un tramo de read_file (~15k tokens).
+RESOURCE_CHARS = 60_000
+
+
+def _report_files() -> list[Path]:
+    if not tools.DOCS_OUTPUT_DIR.is_dir():
+        return []
+    return sorted(
+        p
+        for p in tools.DOCS_OUTPUT_DIR.glob("*.md")
+        if p.is_file() and not p.name.startswith(("_", "."))
+    )
+
+
+def _kb_files() -> list[str]:
+    if not tools.KNOWLEDGE_BASE_DIR.is_dir():
+        return []
+    rutas = []
+    for p in sorted(tools.KNOWLEDGE_BASE_DIR.rglob("*")):
+        rel = p.relative_to(tools.KNOWLEDGE_BASE_DIR)
+        if p.is_dir() or any(parte.startswith(".") for parte in rel.parts):
+            continue
+        if not tools._is_within(tools.KNOWLEDGE_BASE_DIR, p):
+            continue
+        rutas.append(str(rel))
+    return rutas
+
+
+class JeicobServer(MCPServer):
+    """MCPServer cuyo listado de resources refleja el disco en cada petición:
+    cada documento de knowledge_base/ y cada reporte de docs_output/ aparece
+    como un resource concreto (las plantillas resuelven la lectura)."""
+
+    async def list_resources(self) -> list[MCPResource]:
+        recursos = await super().list_resources()
+        for rel in _kb_files():
+            recursos.append(
+                MCPResource(
+                    uri=KNOWLEDGE_URI + urllib.parse.quote(rel),
+                    name=rel,
+                    title=Path(rel).stem,
+                    description="Documento de knowledge_base/ (texto extraído)",
+                    mime_type="text/plain",
+                )
+            )
+        for reporte in _report_files():
+            recursos.append(
+                MCPResource(
+                    uri=REPORTS_URI + urllib.parse.quote(reporte.name),
+                    name=f"reports/{reporte.name}",
+                    title=reporte.stem,
+                    description="Reporte generado en docs_output/",
+                    mime_type="text/markdown",
+                )
+            )
+        return recursos
+
+
+mcp = JeicobServer("jeicob", instructions=INSTRUCTIONS, lifespan=_lifespan)
 
 _READ_ONLY = ToolAnnotations(
     readOnlyHint=True, idempotentHint=True, openWorldHint=False
 )
+
+
+async def _notify_resources_changed(ctx: Context) -> None:
+    """Avisa al cliente de que hay un documento o reporte nuevo (best effort:
+    un cliente que no lo soporte no debe hacer fallar la tool)."""
+    try:
+        # Protocolo 2026-07-28: eventos para los clientes suscritos con
+        # `subscriptions/listen`.
+        await ctx.notify_resources_changed()
+    except Exception as exc:  # noqa: BLE001
+        log.debug("notify_resources_changed falló: %s", exc)
+    try:
+        # Clientes con versiones anteriores del protocolo:
+        # notifications/resources/list_changed clásica.
+        enviar = getattr(
+            ctx.request_context.session, "send_resource_list_changed", None
+        )
+        if enviar is not None:
+            await enviar()
+    except Exception as exc:  # noqa: BLE001
+        log.debug("send_resource_list_changed falló: %s", exc)
 
 
 def _ok(resultado: str) -> str:
@@ -260,7 +355,8 @@ def read_file(path: str, offset: int = 0, max_chars: int = MCP_READ_CHARS) -> st
     ),
     structured_output=False,
 )
-def write_summary(
+async def write_summary(
+    ctx: Context,
     filename: str,
     title: str,
     abstract: str,
@@ -283,8 +379,9 @@ def write_summary(
         key_points: Puntos clave o hallazgos destacados (opcional).
         source: Documento fuente, DOI o URL (opcional).
     """
-    return _ok(
-        tools.write_summary(
+    resultado = _ok(
+        await asyncio.to_thread(
+            tools.write_summary,
             filename=filename,
             title=title,
             abstract=abstract,
@@ -293,6 +390,8 @@ def write_summary(
             source=source,
         )
     )
+    await _notify_resources_changed(ctx)
+    return resultado
 
 
 # --- Tools de RAG -------------------------------------------------------------
@@ -362,7 +461,7 @@ def search_references(query: str, limit: int = 5) -> str:
     return _ok(references.search_references(query, limit))
 
 
-async def download_reference(url: str, filename: str) -> str:
+async def download_reference(ctx: Context, url: str, filename: str) -> str:
     """Descarga a knowledge_base/ un PDF encontrado con search_references y lo
     indexa automáticamente (no hace falta ingest_corpus después).
 
@@ -375,6 +474,7 @@ async def download_reference(url: str, filename: str) -> str:
     )
     nombre = references.normalized_pdf_name(filename)
     indexado = _ok(await _rag.run(lambda rag: rag.ingest_file(nombre)))
+    await _notify_resources_changed(ctx)
     return f"{descarga}\n{indexado}"
 
 
@@ -396,6 +496,118 @@ if NETWORK_ENABLED:
         ),
         structured_output=False,
     )(download_reference)
+
+
+# --- Resources ----------------------------------------------------------------
+
+
+@mcp.resource(
+    KNOWLEDGE_URI + "{+path}",
+    name="knowledge",
+    title="Documento de knowledge_base",
+    description="Texto extraído de un documento de knowledge_base/ (PDF, MD, TXT).",
+    mime_type="text/plain",
+)
+def knowledge_resource(path: str) -> str:
+    texto = tools.read_file(
+        urllib.parse.unquote(path), offset=0, max_chars=RESOURCE_CHARS
+    )
+    if texto.startswith("ERROR"):
+        if "no existe" in texto:
+            raise ResourceNotFoundError(texto)
+        raise ResourceError(texto)
+    return texto
+
+
+@mcp.resource(
+    REPORTS_URI + "{name}",
+    name="report",
+    title="Reporte generado",
+    description="Reporte Markdown de docs_output/.",
+    mime_type="text/markdown",
+)
+def report_resource(name: str) -> str:
+    nombre = urllib.parse.unquote(name)
+    try:
+        ruta = tools._resolve_within(tools.DOCS_OUTPUT_DIR, nombre)
+    except ValueError as exc:
+        raise ResourceError(str(exc)) from exc
+    if ruta.suffix.lower() != ".md" or not ruta.is_file():
+        raise ResourceNotFoundError(f"No existe el reporte '{nombre}' en docs_output/.")
+    return ruta.read_text(encoding="utf-8", errors="replace")
+
+
+# --- Prompts (en Claude Code aparecen como /mcp__jeicob__<nombre>) -------------
+
+
+@mcp.prompt(title="Reporte de investigación")
+def research_report(topic: str, filename: str | None = None) -> str:
+    """Investiga un tema con el corpus local (y fuentes externas si hace
+    falta) y escribe un reporte en docs_output/."""
+    destino = f"`{filename}`" if filename else "un nombre de fichero descriptivo (.md)"
+    externas = (
+        "Si el corpus no basta, busca literatura nueva con search_references y "
+        "descarga los papers relevantes con download_reference (ya los indexa)."
+        if NETWORK_ENABLED
+        else "Las fuentes externas están desactivadas: trabaja solo con el corpus."
+    )
+    return f"""\
+Investiga este tema y escribe un reporte: {topic}
+
+1. Revisa qué hay en local con read_directory y search_corpus. Si search_corpus \
+dice que no hay nada indexado, ejecuta antes ingest_corpus.
+2. {externas}
+3. Lee en detalle, con read_file (por tramos), los documentos más relevantes.
+4. Escribe el reporte con write_summary en {destino}.
+
+{prompts.REPORT_RULES}
+Responde en español."""
+
+
+@mcp.prompt(title="Resumir documento")
+def summarize_document(path: str) -> str:
+    """Genera el reporte completo de un documento concreto de knowledge_base/."""
+    return f"""\
+Escribe un reporte completo del documento `{path}` de knowledge_base/.
+
+1. Léelo entero con read_file. Es largo: sigue llamándola con el offset que \
+indica "[...continúa ...]" hasta terminar.
+2. Escribe el reporte con write_summary (source="{path}").
+
+{prompts.REPORT_RULES}
+Responde en español."""
+
+
+@mcp.prompt(title="Preguntar al corpus")
+def ask_corpus(question: str) -> str:
+    """Responde una pregunta usando solo la literatura indexada."""
+    return f"""\
+Responde usando solo la literatura de knowledge_base/: {question}
+
+Usa search_corpus (y read_file si necesitas más contexto de un documento). Si el \
+corpus no está indexado, ejecuta antes ingest_corpus. Cita el documento de cada \
+afirmación y di claramente si el corpus no contiene la respuesta.
+Responde en español."""
+
+
+@mcp.completion()
+async def _complete(ref, argument, _context) -> Completion | None:
+    """Autocompleta rutas de documentos y nombres de reportes."""
+    candidatos: list[str] = []
+    if argument.name == "path" and (
+        isinstance(ref, ResourceTemplateReference)
+        or (isinstance(ref, PromptReference) and ref.name == "summarize_document")
+    ):
+        candidatos = _kb_files()
+    elif argument.name == "name" and isinstance(ref, ResourceTemplateReference):
+        candidatos = [p.name for p in _report_files()]
+    if not candidatos:
+        return None
+    prefijo = (argument.value or "").lower()
+    valores = [c for c in candidatos if c.lower().startswith(prefijo)]
+    return Completion(
+        values=valores[:100], total=len(valores), has_more=len(valores) > 100
+    )
 
 
 def main() -> None:

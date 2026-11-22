@@ -23,6 +23,7 @@ from pathlib import Path
 
 import anyio
 from mcp import Client, StdioServerParameters
+from mcp.shared.exceptions import MCPError
 
 from . import config
 
@@ -102,6 +103,24 @@ async def _run(full: bool) -> None:
             )
             assert not r.is_error and (out / "escape.md").exists(), _text(r)
             print("write_summary: validación y sandbox OK")
+
+            uris = {str(r.uri) for r in (await c.list_resources()).resources}
+            assert uris == {
+                "jeicob://knowledge/dicom.md",
+                "jeicob://reports/escape.md",
+            }, uris
+            rr = await c.read_resource("jeicob://knowledge/dicom.md")
+            assert "DICOM" in rr.contents[0].text
+            try:
+                await c.read_resource("jeicob://reports/..%2F..%2Fpyproject.toml")
+                raise AssertionError("un resource ha escapado de docs_output/")
+            except MCPError:
+                pass
+            nombres_p = {p.name for p in (await c.list_prompts()).prompts}
+            assert nombres_p == {"research_report", "summarize_document", "ask_corpus"}
+            g = await c.get_prompt("summarize_document", {"path": "dicom.md"})
+            assert "dicom.md" in g.messages[0].content.text
+            print("resources y prompts OK")
 
             if full:
                 avances: list[tuple] = []
