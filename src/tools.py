@@ -110,6 +110,14 @@ def extract_text(ruta: Path, use_cache: bool = True) -> str:
     return _extract_cached(str(ruta), st.st_mtime_ns, st.st_size)
 
 
+def as_bool(valor: object) -> bool:
+    """Interpreta un flag que puede llegar como texto (los LLM locales mandan a
+    veces `"false"` en vez de `false`): `bool("false")` sería True."""
+    if isinstance(valor, str):
+        return valor.strip().lower() in {"1", "true", "yes", "si", "sí", "on"}
+    return bool(valor)
+
+
 # --- Tools expuestas al LLM ---------------------------------------------------
 
 
@@ -124,8 +132,11 @@ def read_directory() -> str:
         Un listado en texto con una línea por documento, o un aviso si la
         carpeta está vacía.
     """
-    if not KNOWLEDGE_BASE_DIR.exists():
-        return f"La carpeta de conocimiento no existe: {KNOWLEDGE_BASE_DIR}"
+    if not KNOWLEDGE_BASE_DIR.is_dir():
+        return (
+            f"ERROR: la carpeta de conocimiento no existe o no es un directorio: "
+            f"{KNOWLEDGE_BASE_DIR}"
+        )
 
     entradas: list[str] = []
     for ruta in sorted(KNOWLEDGE_BASE_DIR.rglob("*")):
@@ -166,33 +177,59 @@ def read_file(path: str, offset: int = 0, max_chars: int = MAX_READ_CHARS) -> st
         El tramo de texto pedido, o un mensaje de error si no existe o no se
         puede leer.
     """
+    try:
+        return read_chunk(path, offset, max_chars)
+    except ReadError as exc:
+        return f"ERROR: {exc}"
+
+
+class ReadError(Exception):
+    """Fallo al leer un documento. `not_found` distingue "no existe" del resto
+    (el servidor MCP lo traduce a errores distintos)."""
+
+    def __init__(self, mensaje: str, not_found: bool = False) -> None:
+        super().__init__(mensaje)
+        self.not_found = not_found
+
+
+def read_chunk(path: str, offset: int = 0, max_chars: int = MAX_READ_CHARS) -> str:
+    """Como `read_file`, pero lanza `ReadError` en vez de devolver "ERROR: ...".
+
+    Es la señal estructurada que usa el servidor MCP: el texto de un documento
+    puede empezar legítimamente por "ERROR", así que no se puede deducir el
+    fallo del contenido devuelto.
+    """
     if offset < 0:
-        return "ERROR: offset no puede ser negativo."
+        raise ReadError("offset no puede ser negativo.")
     if max_chars < 1:
-        return "ERROR: max_chars debe ser al menos 1."
+        raise ReadError("max_chars debe ser al menos 1.")
     max_chars = min(max_chars, MAX_READ_CHARS)
 
     try:
         ruta = _resolve_within(KNOWLEDGE_BASE_DIR, path)
     except ValueError as exc:
-        return f"ERROR: {exc}"
+        raise ReadError(str(exc)) from exc
 
     if not ruta.exists() or not ruta.is_file():
-        return f"ERROR: el documento '{path}' no existe en knowledge_base/."
+        raise ReadError(
+            f"el documento '{path}' no existe en knowledge_base/.", not_found=True
+        )
 
     try:
         texto = extract_text(ruta)
     except ValueError as exc:
-        return f"ERROR: {exc}"
-    except Exception as exc:  # noqa: BLE001 — devolvemos el error al LLM, no lo propagamos
-        return f"ERROR al leer '{path}': {exc}"
+        raise ReadError(str(exc)) from exc
+    except Exception as exc:  # se informa al LLM como ReadError, no se propaga
+        raise ReadError(f"no se pudo leer '{path}': {exc}") from exc
 
     if not texto:
         return f"[El documento '{path}' no contiene texto extraíble.]"
 
     total = len(texto)
     if offset >= total:
-        return f"ERROR: offset={offset} fuera de rango; el documento tiene {total} caracteres."
+        raise ReadError(
+            f"offset={offset} fuera de rango; el documento tiene {total} caracteres."
+        )
 
     fin = min(offset + max_chars, total)
     tramo = texto[offset:fin]
@@ -279,11 +316,13 @@ def write_summary(
         destino = _resolve_within(DOCS_OUTPUT_DIR, nombre_base)
     except ValueError as exc:
         return f"ERROR: {exc}"
+    overwrite = as_bool(overwrite)
+    existe = (
+        f"ERROR: ya existe el reporte '{nombre_base}'. Usa overwrite=true para "
+        "reemplazarlo o elige otro nombre."
+    )
     if destino.exists() and not overwrite:
-        return (
-            f"ERROR: ya existe el reporte '{nombre_base}'. Usa overwrite=true para "
-            "reemplazarlo o elige otro nombre."
-        )
+        return existe
 
     # --- Ensamblado del reporte Markdown -------------------------------------
     partes: list[str] = [f"# {title.strip()}", ""]
@@ -299,7 +338,12 @@ def write_summary(
 
     try:
         DOCS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        destino.write_text(contenido, encoding="utf-8")
+        # "x" crea el fichero de forma atómica: si otro proceso lo crea entre la
+        # comprobación de arriba y esta línea, falla en vez de pisarlo.
+        with destino.open("w" if overwrite else "x", encoding="utf-8") as f:
+            f.write(contenido)
+    except FileExistsError:
+        return existe
     except Exception as exc:  # noqa: BLE001
         return f"ERROR al escribir '{nombre_base}': {exc}"
 

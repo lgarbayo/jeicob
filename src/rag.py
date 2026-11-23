@@ -252,7 +252,10 @@ class RAGEngine:
         return f"{verbo} '{rel}': {len(fragmentos)} fragmentos indexados."
 
     def ingest_directory(
-        self, force: bool = False, progress: ProgressCallback | None = None
+        self,
+        force: bool = False,
+        progress: ProgressCallback | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> str:
         """Sincroniza el índice con `knowledge_base/`.
 
@@ -263,6 +266,13 @@ class RAGEngine:
             force: Reindexar todos los documentos aunque no hayan cambiado.
             progress: Callback opcional `(i, total, fichero)` llamado antes de
                 procesar cada documento.
+            should_stop: Callback opcional; si devuelve True entre dos
+                documentos, se interrumpe la sincronización (sin podar).
+
+        Returns:
+            Una línea por documento y un total. Empieza por "ERROR: " solo si
+            no se ha podido indexar ninguno; un fallo parcial se resume en la
+            primera línea ("Sincronizado con N errores...") sin ser un error.
         """
         if not self.kb_dir.is_dir():
             # Sin esto, una KB inexistente (variable mal escrita, volumen sin
@@ -274,9 +284,15 @@ class RAGEngine:
         ficheros = self.list_ingestible()
         resultados: list[str] = []
         for i, rel in enumerate(ficheros):
+            if should_stop is not None and should_stop():
+                return (
+                    f"ERROR: sincronización interrumpida tras {i} de "
+                    f"{len(ficheros)} documentos (no se ha podado el índice)."
+                )
             if progress is not None:
                 progress(i, len(ficheros), rel)
             resultados.append(self.ingest_file(rel, force=force))
+        errores = sum(r.startswith("ERROR") for r in resultados)
 
         for huerfano in sorted(self.indexed_sources() - set(ficheros)):
             self._delete_source(huerfano)
@@ -287,6 +303,16 @@ class RAGEngine:
         if not resultados:
             return "No hay documentos ingeribles (.pdf/.md/.txt) en knowledge_base/."
         resultados.append(f"Total en el índice: {self.count()} fragmentos.")
+        if ficheros and errores == len(ficheros):
+            resultados.insert(
+                0, f"ERROR: no se pudo indexar ninguno de los {errores} documentos."
+            )
+        elif errores:
+            resultados.insert(
+                0,
+                f"Sincronizado con {errores} error(es) de {len(ficheros)} documentos "
+                "(detalle abajo).",
+            )
         return "\n".join(resultados)
 
     # --- Consulta -------------------------------------------------------------
