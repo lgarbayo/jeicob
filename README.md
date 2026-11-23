@@ -319,7 +319,10 @@ claude mcp add --transport http jeicob http://127.0.0.1:8765/mcp \
 - Cada petición debe llevar `Authorization: Bearer <JEICOB_MCP_TOKEN>`; si no,
   responde 401. El servidor no arranca sin token.
 - Por defecto solo escucha en `127.0.0.1`, con la protección contra *DNS
-  rebinding* del SDK (cabeceras `Host`/`Origin` de fuera de localhost → 421).
+  rebinding* del SDK (`Host` ajeno a localhost → 421; `Origin` ajeno → 403),
+  activa para cualquier dirección de loopback que pases en `--host`.
+- Un `JEICOB_MCP_TRANSPORT` o `JEICOB_MCP_PORT` no válidos son un error al
+  arrancar, igual que en la línea de comandos.
 - `--host 0.0.0.0` (o `JEICOB_MCP_HOST`) lo expone a la red **sin TLS**: el
   token y los documentos viajarían en claro. Hazlo solo detrás de un proxy
   inverso con https.
@@ -343,8 +346,10 @@ echo "QDRANT_URL=http://localhost:6333" >> .env
 Con `QDRANT_URL` definida, jeicob ignora `QDRANT_PATH`. No hace falta migrar el
 índice local: la ingesta es idempotente, así que basta con volver a ejecutar
 `ingest_corpus` para reconstruirlo desde `knowledge_base/`. Los embeddings se
-siguen calculando en tu máquina; al servidor solo llegan los vectores y el texto
-de los fragmentos (que quedan en el volumen de Docker `qdrant_storage`).
+siguen calculando en tu máquina; al servidor llegan los vectores, el texto de
+cada fragmento, la ruta relativa del documento (`source`, que puede contener
+datos identificativos si así se llaman tus ficheros) y su SHA-256. Todo ello
+queda en el volumen de Docker `qdrant_storage`.
 
 Para comprobarlo: `uv run python -m jeicob.rag --url http://localhost:6333` ejecuta
 la prueba de ingesta y consulta en una colección temporal del servidor.

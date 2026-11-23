@@ -68,7 +68,9 @@ and this project adheres to
   commands; `.mcp.json` uses `jeicob-mcp`. Outside a checkout, data defaults
   to `~/.jeicob`.
 
-- Unrecognised boolean values in `JEICOB_*` flags are reported on stderr;
+- Unrecognised boolean values in `JEICOB_*` flags (including
+  `JEICOB_ALLOW_PRIVATE_NETWORK`, which now accepts yes/on/sí too) are
+  reported on stderr;
   for `JEICOB_ENABLE_NETWORK` they disable the network (fail closed). Invalid
   numbers in `JEICOB_QDRANT_*` are reported too.
 
@@ -88,8 +90,10 @@ and this project adheres to
 - MCP over streamable-http: `jeicob-mcp --transport http [--host] [--port]`
   (or `JEICOB_MCP_TRANSPORT/HOST/PORT`), so several clients can share one
   server. A bearer token (`JEICOB_MCP_TOKEN`, ≥ 32 characters) is mandatory,
-  it binds to `127.0.0.1` by default with the SDK's DNS-rebinding protection,
-  and the smoke test covers 401/421 and tool calls over HTTP.
+  it binds to `127.0.0.1` by default with the SDK's DNS-rebinding protection
+  (enabled explicitly for any loopback `--host`), invalid
+  `JEICOB_MCP_TRANSPORT`/`JEICOB_MCP_PORT` values are startup errors, and the
+  smoke test covers 401/421/403 and tool calls over HTTP.
 
 - Optional Qdrant server mode: `QDRANT_URL` / `QDRANT_API_KEY` switch the RAG
   engine from the on-disk store to a Qdrant server, so the CLI and several MCP

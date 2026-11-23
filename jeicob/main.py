@@ -15,7 +15,6 @@ import os
 import sys
 
 from anthropic import Anthropic, beta_tool
-from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -208,7 +207,9 @@ def _run_turn(client: Anthropic, messages: list) -> None:
 
 
 def main() -> None:
-    load_dotenv()
+    # El .env lo carga jeicob.config al importarse (el del repo o ~/.jeicob),
+    # igual que en jeicob-local y jeicob-mcp; un load_dotenv() sin ruta
+    # buscaría hacia arriba y podría coger el .env de otro proyecto.
 
     if not os.getenv("ANTHROPIC_API_KEY"):
         console.print(

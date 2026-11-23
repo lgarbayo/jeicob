@@ -54,7 +54,9 @@ def _allowed_hosts() -> list[str]:
 
 
 def _private_allowed() -> bool:
-    return os.getenv("JEICOB_ALLOW_PRIVATE_NETWORK", "").strip() in {"1", "true"}
+    # Mismos valores que el resto de flags; uno no reconocido se avisa y deja
+    # el bloqueo puesto (falla cerrado).
+    return config.env_flag("JEICOB_ALLOW_PRIVATE_NETWORK", False, on_unknown=False)
 
 
 def check_url(url: str) -> None:

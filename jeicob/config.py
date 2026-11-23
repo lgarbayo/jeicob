@@ -36,6 +36,7 @@ transporte stdio de MCP).
 from __future__ import annotations
 
 import logging
+import math
 import os
 from pathlib import Path
 
@@ -93,15 +94,24 @@ def env_flag(name: str, default: bool, on_unknown: bool | None = None) -> bool:
 
 
 def env_float(name: str, default: float) -> float:
-    """Lee un número del entorno; si no es válido, avisa y usa `default`."""
+    """Lee un número finito y no negativo del entorno (duraciones); si no lo
+    es (texto, nan, inf, negativo), avisa y usa `default`."""
     valor = os.getenv(name)
     if valor is None or not valor.strip():
         return default
     try:
-        return float(valor)
+        numero = float(valor)
     except ValueError:
-        _log.warning("%s=%r no es un número; se toma %s.", name, valor, default)
+        numero = math.nan
+    if not math.isfinite(numero) or numero < 0:
+        _log.warning(
+            "%s=%r no es un número válido (finito y >= 0); se toma %s.",
+            name,
+            valor,
+            default,
+        )
         return default
+    return numero
 
 
 def _resolve(value: str | None, default: Path, base: Path) -> Path:

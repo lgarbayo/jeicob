@@ -10,7 +10,7 @@ docs_output y Qdrant temporales (no toca tus datos), y comprueba:
   - que los errores llegan como `isError=true`;
   - que con `JEICOB_ENABLE_NETWORK=0` desaparecen las tools de red;
   - el transporte streamable-http: token obligatorio (401), protección DNS
-    rebinding (421) y tools accesibles con el token correcto.
+    rebinding (421 Host, 403 Origin) y tools accesibles con el token correcto.
 
 Con `--full` además ejercita el RAG de verdad (necesita el modelo de
 embeddings; `uv run python -m jeicob.rag --prefetch` lo descarga): ingesta
@@ -95,8 +95,13 @@ async def _run(full: bool) -> None:
                 "JEICOB_MCP_PREFETCH": "0",
                 "JEICOB_QDRANT_IDLE_RELEASE": "1",
                 "JEICOB_QDRANT_LOCK_TIMEOUT": "1",
-                # Explícito: si no, heredaría un JEICOB_ENABLE_NETWORK=0 del .env.
+                # Explícitos: si no, heredaría del .env un JEICOB_ENABLE_NETWORK=0
+                # o, peor, un QDRANT_URL, y la prueba escribiría (y podaría) en
+                # la colección real del Qdrant en servidor. Vacías = sin definir.
                 "JEICOB_ENABLE_NETWORK": "1",
+                "QDRANT_URL": "",
+                "QDRANT_API_KEY": "",
+                "JEICOB_MCP_TRANSPORT": "",
             },
         )
 
@@ -339,9 +344,14 @@ async def _check_http(params: StdioServerParameters) -> None:
                 _post_status(url, {}),
                 _post_status(url, {"Authorization": "Bearer " + "y" * 46}),
                 _post_status(url, {**bueno, "Host": "evil.example"}),
+                _post_status(url, {**bueno, "Origin": "http://evil.example"}),
+                _post_status(url, {"Authorization": f"bearer {token}"}),
             )
         )
-        assert estados == (401, 401, 421), estados
+        # 401 sin token o con uno erróneo; 421 Host ajeno; 403 Origin ajeno; y
+        # el esquema "bearer" no distingue mayúsculas (RFC 7235).
+        assert estados[:4] == (401, 401, 421, 403), estados
+        assert estados[4] not in (401, 403, 421), estados
         http = create_mcp_http_client(headers=bueno)
         async with Client(streamable_http_client(url, http_client=http)) as c:
             nombres = {t.name for t in (await c.list_tools()).tools}

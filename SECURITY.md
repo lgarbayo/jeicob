@@ -90,8 +90,9 @@ This project has the following known security considerations:
   Scholar/arXiv.
 - **Qdrant server mode** (`QDRANT_URL`, `docker-compose.yml`): the bundled
   compose file binds Qdrant to `127.0.0.1` only, requires `QDRANT_API_KEY` and
-  disables Qdrant telemetry. The server stores chunk text (document content)
-  in the `qdrant_storage` Docker volume. If you point `QDRANT_URL` at another
+  disables Qdrant telemetry. The server stores the vectors, the chunk text
+  (document content), each document's relative path (which may itself be
+  identifying) and its SHA-256 in the `qdrant_storage` Docker volume. If you point `QDRANT_URL` at another
   host, use https: with plain http the API key and the content travel
   unencrypted (qdrant-client warns about it).
 - **MCP over HTTP** (`jeicob-mcp --transport http`): every request needs

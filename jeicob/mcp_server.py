@@ -61,6 +61,7 @@ from mcp.server.mcpserver.exceptions import (
     ResourceNotFoundError,
     ToolError,
 )
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
 from mcp.types import (
     INVALID_PARAMS,
@@ -826,19 +827,29 @@ MIN_TOKEN_CHARS = 32
 
 class BearerTokenMiddleware:
     """Middleware ASGI: exige `Authorization: Bearer <token>` en cada petición
-    HTTP. Compara en tiempo constante y responde 401 sin detalles."""
+    HTTP. El esquema no distingue mayúsculas (RFC 7235); el token se compara
+    en tiempo constante y la respuesta es un 401 sin detalles."""
 
     def __init__(self, app: Any, token: str) -> None:
         self.app = app
-        self._esperado = f"Bearer {token}".encode()
+        self._token = token.encode()
+
+    def _autorizado(self, cabecera: bytes) -> bool:
+        esquema, _, credencial = cabecera.strip().partition(b" ")
+        return esquema.lower() == b"bearer" and hmac.compare_digest(
+            credencial.strip(), self._token
+        )
 
     async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
         if scope["type"] != "http":  # lifespan: pasa sin comprobar
             await self.app(scope, receive, send)
             return
-        recibido = dict(scope.get("headers") or []).get(b"authorization", b"")
-        if not hmac.compare_digest(recibido, self._esperado):
-            audit_log.info("http %s rechazado 401", scope.get("path", "?")[:40])
+        cabecera = dict(scope.get("headers") or []).get(b"authorization", b"")
+        if not self._autorizado(cabecera):
+            # La ruta la elige el cliente (sin autenticar): solo se registra un
+            # valor de un conjunto cerrado, para que no pueda falsificar líneas.
+            ruta = "/mcp" if scope.get("path") == "/mcp" else "otra-ruta"
+            audit_log.info("http %s rechazado 401", ruta)
             await send(
                 {
                     "type": "http.response.start",
@@ -857,7 +868,7 @@ class BearerTokenMiddleware:
 
 
 def _is_loopback(host: str) -> bool:
-    if host == "localhost":
+    if host.lower().rstrip(".") == "localhost":
         return True
     try:
         return ipaddress.ip_address(host.strip("[]")).is_loopback
@@ -865,17 +876,57 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+def _rebinding_protection(host: str) -> TransportSecuritySettings | None:
+    """Protección DNS rebinding explícita para cualquier host de loopback.
+
+    El SDK solo la activa sola para los literales 127.0.0.1, localhost y ::1;
+    con 127.0.0.2 o 0:0:0:0:0:0:0:1 quedaría desactivada sin avisar."""
+    if not _is_loopback(host):
+        return None
+    literal = f"[{host.strip('[]')}]" if ":" in host else host
+    hosts = ["127.0.0.1", "localhost", "[::1]", literal]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[f"{h}:*" for h in dict.fromkeys(hosts)],
+        allowed_origins=[f"http://{h}:*" for h in dict.fromkeys(hosts)],
+    )
+
+
+def _check_secret(nombre: str, valor: str) -> None:
+    if len(valor) < MIN_TOKEN_CHARS:
+        raise SystemExit(
+            f"{nombre} debe tener al menos {MIN_TOKEN_CHARS} caracteres "
+            "(genera uno con: openssl rand -hex 32)."
+        )
+    if valor.startswith("#") or any(c.isspace() for c in valor):
+        # Típico de descomentar `# VAR=   # comentario` en el .env: el
+        # comentario acabaría siendo el secreto (público, está en el repo).
+        raise SystemExit(
+            f"{nombre} no puede empezar por '#' ni contener espacios: "
+            "¿es un comentario del .env? Genera uno con: openssl rand -hex 32."
+        )
+
+
 def build_http_app(token: str, host: str = "127.0.0.1") -> Any:
     """App ASGI del servidor por streamable-http, protegida con token.
 
-    En loopback, el SDK activa además la protección contra DNS rebinding
-    (valida las cabeceras Host y Origin)."""
-    if len(token) < MIN_TOKEN_CHARS:
-        raise SystemExit(
-            f"JEICOB_MCP_TOKEN debe tener al menos {MIN_TOKEN_CHARS} caracteres "
-            "(genera uno con: openssl rand -hex 32)."
-        )
-    return BearerTokenMiddleware(mcp.streamable_http_app(host=host), token)
+    En loopback se activa además la protección contra DNS rebinding del SDK
+    (Host ajeno → 421, Origin ajeno → 403)."""
+    _check_secret("JEICOB_MCP_TOKEN", token)
+    app = mcp.streamable_http_app(
+        host=host, transport_security=_rebinding_protection(host)
+    )
+    return BearerTokenMiddleware(app, token)
+
+
+def _port(valor: str) -> int:
+    try:
+        puerto = int(valor)
+    except ValueError:
+        puerto = -1
+    if not 1 <= puerto <= 65535:
+        raise argparse.ArgumentTypeError(f"puerto no válido: {valor!r} (1-65535)")
+    return puerto
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -885,21 +936,41 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--transport",
         choices=["stdio", "http"],
-        default=os.getenv("JEICOB_MCP_TRANSPORT", "stdio"),
-        help="stdio (por defecto, lo lanza el cliente) o http (streamable-http)",
+        default=None,
+        help="stdio (por defecto, lo lanza el cliente) o http (streamable-http); "
+        "también JEICOB_MCP_TRANSPORT",
     )
     parser.add_argument(
         "--host",
-        default=os.getenv("JEICOB_MCP_HOST", "127.0.0.1"),
-        help="interfaz HTTP (por defecto 127.0.0.1: solo esta máquina)",
+        default=None,
+        help="interfaz HTTP (por defecto 127.0.0.1: solo esta máquina); "
+        "también JEICOB_MCP_HOST",
     )
     parser.add_argument(
         "--port",
-        type=int,
-        default=int(config.env_float("JEICOB_MCP_PORT", DEFAULT_HTTP_PORT)),
-        help=f"puerto HTTP (por defecto {DEFAULT_HTTP_PORT})",
+        type=_port,
+        default=None,
+        help=f"puerto HTTP (por defecto {DEFAULT_HTTP_PORT}); también JEICOB_MCP_PORT",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    # Las variables de entorno se validan igual que los argumentos (argparse
+    # no comprueba `choices` en un default): un valor erróneo es un error, no
+    # un cambio silencioso de transporte.
+    if args.transport is None:
+        valor = os.getenv("JEICOB_MCP_TRANSPORT", "stdio").strip().lower() or "stdio"
+        if valor not in {"stdio", "http"}:
+            parser.error(f"JEICOB_MCP_TRANSPORT={valor!r} no válido (stdio o http)")
+        args.transport = valor
+    if args.transport == "http":
+        if args.host is None:
+            args.host = os.getenv("JEICOB_MCP_HOST", "").strip() or "127.0.0.1"
+        if args.port is None:
+            valor = os.getenv("JEICOB_MCP_PORT", "").strip()
+            try:
+                args.port = _port(valor) if valor else DEFAULT_HTTP_PORT
+            except argparse.ArgumentTypeError as exc:
+                parser.error(f"JEICOB_MCP_PORT: {exc}")
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
