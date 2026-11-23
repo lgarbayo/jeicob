@@ -20,8 +20,8 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from . import references, tools
-from .prompts import SYSTEM_PROMPT
+from . import config, references, tools
+from .prompts import system_prompt
 from .rag import RAGEngine
 
 console = Console()
@@ -161,15 +161,21 @@ def download_reference(url: str, filename: str) -> str:
     return f"{resultado}\n{indexado}"
 
 
+# Con JEICOB_ENABLE_NETWORK=0 el modelo no ve las tools con salida a internet.
+_NETWORK_TOOLS = (
+    [search_references, download_reference] if config.NETWORK_ENABLED else []
+)
+
 AGENT_TOOLS = [
     read_directory,
     read_file,
     ingest_corpus,
     search_corpus,
-    search_references,
-    download_reference,
+    *_NETWORK_TOOLS,
     write_summary,
 ]
+
+SYSTEM_PROMPT = system_prompt(network=config.NETWORK_ENABLED)
 
 
 # --- Bucle del agente ---------------------------------------------------------
@@ -217,7 +223,9 @@ def main() -> None:
     console.print(
         Panel.fit(
             "[bold]jeicob[/] — agente de investigación (3DGS · DICOM · normativas)\n"
-            f"Modelo: [cyan]{MODEL}[/]  ·  Escribe [bold]salir[/] para terminar.",
+            f"Modelo: [cyan]{MODEL}[/]  ·  "
+            f"Red: {'sí' if config.NETWORK_ENABLED else '[yellow]desactivada[/]'}  ·  "
+            "Escribe [bold]salir[/] para terminar.",
             border_style="green",
         )
     )

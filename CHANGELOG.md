@@ -86,7 +86,10 @@ and this project adheres to
   notifications.
 - `.mcp.json` registering the server for Claude Code, and a stdio smoke test
   (`python -m src.mcp_smoke`) run in CI.
-- `JEICOB_ENABLE_NETWORK=0` to run the MCP server without internet tools.
+- `JEICOB_ENABLE_NETWORK=0` removes the internet tools (`search_references`,
+  `download_reference`) from the CLI orchestrators (Claude and Ollama) and the
+  MCP server, leaves them out of the system prompt and instructions, and makes
+  `src/netguard.py` refuse any outbound request.
 - MCP server settings `JEICOB_QDRANT_IDLE_RELEASE` (30 s),
   `JEICOB_QDRANT_LOCK_TIMEOUT` (10 s) and `JEICOB_MCP_PREFETCH` (1).
 - `python -m src.rag --prefetch` to download the embedding model ahead of time.

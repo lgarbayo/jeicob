@@ -21,7 +21,7 @@ Variables de entorno propias (además de las de `src/config.py`):
 
 | Variable                     | Por defecto | Efecto                                         |
 |------------------------------|-------------|------------------------------------------------|
-| `JEICOB_ENABLE_NETWORK`      | `1`         | `0` no registra search/download_reference      |
+| `JEICOB_ENABLE_NETWORK`      | `1`         | `0` sin search/download_reference (config.py) |
 | `JEICOB_QDRANT_IDLE_RELEASE` | `30`        | segundos sin uso antes de liberar el lock      |
 | `JEICOB_QDRANT_LOCK_TIMEOUT` | `10`        | segundos esperando un lock ocupado             |
 | `JEICOB_MCP_PREFETCH`        | `1`         | `0` no descarga el modelo al arrancar          |
@@ -69,13 +69,6 @@ log = logging.getLogger("jeicob.mcp")
 audit_log = logging.getLogger("jeicob.audit")
 
 
-def _env_flag(name: str, default: bool) -> bool:
-    valor = os.getenv(name)
-    if valor is None:
-        return default
-    return valor.strip().lower() not in {"0", "false", "no", "off", ""}
-
-
 def _env_float(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, default))
@@ -83,10 +76,10 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-NETWORK_ENABLED = _env_flag("JEICOB_ENABLE_NETWORK", True)
+NETWORK_ENABLED = config.NETWORK_ENABLED
 IDLE_RELEASE_S = _env_float("JEICOB_QDRANT_IDLE_RELEASE", 30.0)
 LOCK_TIMEOUT_S = _env_float("JEICOB_QDRANT_LOCK_TIMEOUT", 10.0)
-PREFETCH = _env_flag("JEICOB_MCP_PREFETCH", True)
+PREFETCH = config.env_flag("JEICOB_MCP_PREFETCH", True)
 
 # Tramo por defecto de read_file vía MCP. El límite de salida de Claude Code
 # ronda los 25k tokens; 20k caracteres (~5-6k tokens) deja margen de sobra.

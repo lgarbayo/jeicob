@@ -110,6 +110,7 @@ Variables de entorno (`.env`):
 | `JEICOB_KB_DIR` | `./knowledge_base` | Carpeta de documentos fuente |
 | `JEICOB_OUTPUT_DIR` | `./docs_output` | Carpeta donde se escriben los reportes |
 | `FASTEMBED_CACHE_PATH` | `./.fastembed_cache` | Caché del modelo de embeddings |
+| `JEICOB_ENABLE_NETWORK` | `1` | `0` quita `search_references` y `download_reference` a los tres orquestadores (CLI con Claude, CLI con Ollama y servidor MCP), las omite del prompt de sistema y bloquea en `netguard` cualquier petición saliente. El modelo de embeddings se descarga igualmente si no está en `FASTEMBED_CACHE_PATH`; en un equipo aislado, ejecuta antes `uv run python -m src.rag --prefetch` con red |
 | `JEICOB_DOWNLOAD_ALLOWED_HOSTS` | — | Lista separada por comas; si se define (p. ej. `arxiv.org,semanticscholar.org`), `download_reference` solo descarga de esos dominios y sus subdominios (CLI y MCP) |
 | `JEICOB_ALLOW_PRIVATE_NETWORK` | `0` | `1` o `true` desactiva el bloqueo SSRF de IPs no públicas, para repositorios de la intranet (CLI y MCP) |
 
@@ -150,8 +151,8 @@ Existe una segunda variante del orquestador, `src/main_local.py`, que usa un
 **modelo local servido por [Ollama](https://ollama.com)** en lugar de Claude:
 **0 € por token, sin API key y sin enviar tus documentos a una API de LLM**.
 Ojo: `search_references` y `download_reference` sí hacen peticiones a internet
-(Semantic Scholar, arXiv, la URL de descarga) y en el CLI no se pueden
-desactivar; con datos clínicos, ver §8. Reutiliza exactamente las mismas tools y el
+(Semantic Scholar, arXiv, la URL de descarga); con datos clínicos, desactívalas
+con `JEICOB_ENABLE_NETWORK=0` (ver §8). Reutiliza exactamente las mismas tools y el
 mismo motor RAG; solo cambia el "cerebro".
 
 Requisitos: [Ollama](https://ollama.com) instalado + un modelo con soporte de
@@ -183,7 +184,7 @@ un *tool runner*, `main_local.py` implementa el bucle ReAct a mano.
 | Variante | Fichero | Coste | Calidad | Privacidad |
 |----------|---------|-------|---------|------------|
 | Claude | `src/main.py` | De pago (API key) | Alta | Datos van a la API |
-| Ollama | `src/main_local.py` | **Gratis** | Media | LLM local; las tools de referencias salen a internet |
+| Ollama | `src/main_local.py` | **Gratis** | Media | LLM local; las tools de referencias salen a internet salvo con `JEICOB_ENABLE_NETWORK=0` |
 | Servidor MCP | `src/mcp_server.py` | El de tu cliente MCP | La del modelo del cliente | Datos van al LLM del cliente |
 
 ### 5.2. Como servidor MCP (Claude Code, Claude Desktop…)
@@ -268,13 +269,12 @@ mucho `JEICOB_QDRANT_LOCK_TIMEOUT` desde que se pidió, aunque haya varias en
 cola) y devuelve un error claro. Al cerrar el servidor, una ingesta en curso se
 detiene al terminar el documento actual y libera la base. Usarlos *a la vez* requiere Qdrant en servidor.
 
-Variables propias del servidor (las de descargas, `JEICOB_DOWNLOAD_ALLOWED_HOSTS`
-y `JEICOB_ALLOW_PRIVATE_NETWORK`, están en la tabla general de §4 porque
-afectan también al CLI):
+Variables propias del servidor (`JEICOB_ENABLE_NETWORK` y las de descargas,
+`JEICOB_DOWNLOAD_ALLOWED_HOSTS` y `JEICOB_ALLOW_PRIVATE_NETWORK`, están en la
+tabla general de §4 porque afectan también al CLI):
 
 | Variable | Por defecto | Descripción |
 |----------|-------------|-------------|
-| `JEICOB_ENABLE_NETWORK` | `1` | `0` oculta `search_references` y `download_reference`: ninguna tool sale a internet. El modelo de embeddings se descarga igualmente si no está en `FASTEMBED_CACHE_PATH`; en un equipo aislado, ejecuta antes `uv run python -m src.rag --prefetch` con red |
 | `JEICOB_QDRANT_IDLE_RELEASE` | `30` | Segundos sin uso antes de liberar el lock de Qdrant |
 | `JEICOB_QDRANT_LOCK_TIMEOUT` | `10` | Segundos esperando si otro proceso tiene el lock |
 | `JEICOB_MCP_PREFETCH` | `1` | Descarga el modelo de embeddings en segundo plano al arrancar |
@@ -488,12 +488,12 @@ tool); "Fuente" y "Puntos clave" son opcionales.
   sobrescribe** nada de `knowledge_base/`.
 - **PDFs**: como mucho 3000 páginas por documento, para que un PDF hostil no deje
   al servidor parseando sin fin.
-- **Tools de red desactivables** en el servidor MCP (`JEICOB_ENABLE_NETWORK=0`):
-  imprescindible si `knowledge_base/` contiene datos clínicos, porque la
-  combinación "datos privados + contenido no confiable (PDFs descargados) + salida
-  a internet" permite exfiltrar datos con una inyección de prompt. En el CLI
-  (`src.main`, `src.main_local`) las tools de red están siempre activas: con datos
-  clínicos, usa el servidor MCP con `JEICOB_ENABLE_NETWORK=0`.
+- **Tools de red desactivables** (`JEICOB_ENABLE_NETWORK=0`, en el CLI y en el
+  servidor MCP): imprescindible si `knowledge_base/` contiene datos clínicos,
+  porque la combinación "datos privados + contenido no confiable (PDFs
+  descargados) + salida a internet" permite exfiltrar datos con una inyección de
+  prompt. Con la red desactivada el modelo no ve esas tools y, como segunda
+  barrera, `netguard` rechaza cualquier petición saliente.
 - Las claves y datos locales (`.env`, `.qdrant_data/`, `.venv/`) están en
   `.gitignore` y nunca se versionan.
 

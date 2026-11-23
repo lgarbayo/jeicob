@@ -25,6 +25,7 @@ Variables de entorno:
 |                                  | dominios (y sus subdominios) son accesibles       |
 | `JEICOB_ALLOW_PRIVATE_NETWORK`   | `1` desactiva el bloqueo de IPs no públicas       |
 |                                  | (repositorios institucionales en la intranet)     |
+| `JEICOB_ENABLE_NETWORK`          | `0` rechaza toda petición saliente (ver config)   |
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from . import config
 
 MAX_REDIRECTS = 5
 _SCHEMES = {"http", "https"}
@@ -57,6 +60,14 @@ def _private_allowed() -> bool:
 def check_url(url: str) -> None:
     """Valida esquema, host y lista de permitidos. Lanza
     `BlockedDestinationError` si la URL no está permitida."""
+    if not config.NETWORK_ENABLED:
+        # Segunda barrera: los orquestadores ya no registran las tools de red,
+        # pero nada de jeicob que pase por aquí debe salir a internet. (La
+        # descarga del modelo de embeddings la hace fastembed por su cuenta:
+        # en equipos aislados, precárgalo con `python -m src.rag --prefetch`.)
+        raise BlockedDestinationError(
+            "la salida a internet está desactivada (JEICOB_ENABLE_NETWORK=0)."
+        )
     partes = urllib.parse.urlsplit(url)
     if partes.scheme.lower() not in _SCHEMES:
         raise BlockedDestinationError(

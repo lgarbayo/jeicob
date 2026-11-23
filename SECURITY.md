@@ -77,9 +77,12 @@ This project has the following known security considerations:
   document) can carry instructions aimed at the LLM. Combined with private data
   in `knowledge_base/` and tools that reach the internet, this could leak data
   through `search_references` queries or download URLs. If `knowledge_base/`
-  holds clinical data, run the MCP server with `JEICOB_ENABLE_NETWORK=0`; the
-  CLI orchestrators (`src.main`, `src.main_local`) always expose the network
-  tools.
+  holds clinical data, set `JEICOB_ENABLE_NETWORK=0`: the CLI orchestrators
+  and the MCP server then drop the network tools, and `src/netguard.py` refuses
+  any outbound request as a second barrier. The embedding model is still
+  downloaded by fastembed (from Hugging Face, no document data) if it is not
+  cached; on air-gapped machines pre-fetch it with
+  `uv run python -m src.rag --prefetch`.
 - **Where data goes.** With `src.main` document text is sent to the Anthropic
   API; with the MCP server, everything the tools read is sent to the MCP
   client's LLM. Only `src.main_local` (Ollama) keeps document contents on the

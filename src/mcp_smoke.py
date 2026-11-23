@@ -7,7 +7,8 @@ docs_output y Qdrant temporales (no toca tus datos), y comprueba:
     línea que no lo sea llega al `message_handler` como excepción);
   - lectura, paginación y sandbox de read_file;
   - validación y escritura de write_summary;
-  - que los errores llegan como `isError=true`.
+  - que los errores llegan como `isError=true`;
+  - que con `JEICOB_ENABLE_NETWORK=0` desaparecen las tools de red.
 
 Con `--full` además ejercita el RAG de verdad (necesita el modelo de
 embeddings; `uv run python -m src.rag --prefetch` lo descarga): ingesta
@@ -29,6 +30,7 @@ from mcp.types import INVALID_PARAMS, ResourceTemplateReference
 
 from . import config
 
+NETWORK_TOOLS = {"search_references", "download_reference"}
 EXPECTED_TOOLS = {
     "read_directory",
     "read_file",
@@ -83,6 +85,8 @@ async def _run(full: bool) -> None:
                 "JEICOB_MCP_PREFETCH": "0",
                 "JEICOB_QDRANT_IDLE_RELEASE": "1",
                 "JEICOB_QDRANT_LOCK_TIMEOUT": "1",
+                # Explícito: si no, heredaría un JEICOB_ENABLE_NETWORK=0 del .env.
+                "JEICOB_ENABLE_NETWORK": "1",
             },
         )
 
@@ -247,6 +251,20 @@ async def _run(full: bool) -> None:
 
         assert not ajenos, f"stdout llevó algo que no es JSON-RPC: {ajenos}"
         print("stdout: solo JSON-RPC OK")
+
+        # Sin red: ni las tools ni las instrucciones mencionan las de red.
+        sin_red = StdioServerParameters(
+            command=params.command,
+            args=params.args,
+            cwd=params.cwd,
+            env={**params.env, "JEICOB_ENABLE_NETWORK": "0"},
+        )
+        async with Client(sin_red, read_timeout_seconds=60) as c:
+            nombres = {t.name for t in (await c.list_tools()).tools}
+            assert nombres == EXPECTED_TOOLS - NETWORK_TOOLS, nombres
+            for red in NETWORK_TOOLS:
+                assert red not in (c.instructions or ""), c.instructions
+        print("JEICOB_ENABLE_NETWORK=0: sin tools de red OK")
 
     print("OK: servidor MCP verificado por stdio.")
 

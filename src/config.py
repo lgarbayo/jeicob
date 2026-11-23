@@ -13,10 +13,15 @@ Variables de entorno (todas opcionales):
 | `JEICOB_OUTPUT_DIR`    | `<home>/docs_output`     |
 | `QDRANT_PATH`          | `<home>/.qdrant_data`    |
 | `FASTEMBED_CACHE_PATH` | `<home>/.fastembed_cache`|
+| `JEICOB_ENABLE_NETWORK`| `1`                      |
 
 Las rutas relativas se resuelven contra `JEICOB_HOME`, **nunca** contra el
 directorio de trabajo: así `QDRANT_PATH=./.qdrant_data` apunta al mismo sitio
 aunque el proceso arranque en `/`.
+
+`JEICOB_ENABLE_NETWORK=0` quita `search_references` y `download_reference` a
+los tres orquestadores (CLI con Claude, CLI con Ollama y servidor MCP) y hace
+que `netguard` rechace cualquier petición saliente.
 
 Este módulo no importa nada pesado y no escribe en stdout (requisito del
 transporte stdio de MCP).
@@ -38,6 +43,15 @@ try:
     load_dotenv(_REPO_ROOT / ".env", override=False)
 except ImportError:  # pragma: no cover — python-dotenv es dependencia base
     pass
+
+
+def env_flag(name: str, default: bool) -> bool:
+    """Lee un flag booleano del entorno ("0", "false", "no", "off" o vacío
+    son falsos; cualquier otro valor, verdadero)."""
+    valor = os.getenv(name)
+    if valor is None:
+        return default
+    return valor.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 def _resolve(value: str | None, default: Path, base: Path) -> Path:
@@ -63,6 +77,9 @@ QDRANT_PATH: Path = _resolve(
 FASTEMBED_CACHE_PATH: Path = _resolve(
     os.getenv("FASTEMBED_CACHE_PATH"), PROJECT_ROOT / ".fastembed_cache", PROJECT_ROOT
 )
+
+# Tools con salida a internet (search_references, download_reference).
+NETWORK_ENABLED: bool = env_flag("JEICOB_ENABLE_NETWORK", True)
 
 # fastembed lee esta variable al cargar el modelo. Por defecto usaría
 # `/tmp/fastembed_cache`, que se borra al reiniciar (otra descarga de ~220 MB)

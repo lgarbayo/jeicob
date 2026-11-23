@@ -1,7 +1,7 @@
 """Textos de sistema compartidos por los orquestadores de jeicob.
 
-`main.py` (Claude) y `main_local.py` (Ollama) usan el mismo `SYSTEM_PROMPT`
-(que incluye `TOOLS_GUIDE`, con todas las tools), y el servidor MCP construye
+`main.py` (Claude) y `main_local.py` (Ollama) usan el mismo prompt de sistema,
+`system_prompt(network=...)`, y el servidor MCP construye
 sus instrucciones con `tools_guide(network=...)`, `WORKFLOW` o `WORKFLOW_LOCAL`
 (según JEICOB_ENABLE_NETWORK) y `REPORT_RULES`. Así la descripción del flujo vive en un solo sitio.
 """
@@ -54,19 +54,27 @@ WORKFLOW = """\
 Para recopilar literatura nueva sigue este flujo: search_references → \
 download_reference (ya la indexa) → search_corpus/read_file → write_summary."""
 
-SYSTEM_PROMPT = f"""\
+
+def system_prompt(network: bool = True) -> str:
+    """Prompt de sistema de los orquestadores CLI; sin `network` no menciona
+    las tools de red (JEICOB_ENABLE_NETWORK=0)."""
+    flujo = WORKFLOW if network else WORKFLOW_LOCAL
+    return f"""\
 Eres jeicob, un agente de investigación autónomo especializado en literatura \
 científica sobre 3D Gaussian Splatting, el estándar DICOM y normativas clínicas.
 Tu objetivo es buscar, ingerir y sintetizar papers para producir reportes en Markdown.
 
-{TOOLS_GUIDE}
+{tools_guide(network)}
 
 Formato de los reportes: {REPORT_RULES}
 
 Directrices:
 - Cuando tengas información suficiente para actuar, actúa. No repreguntes lo ya \
 establecido ni enumeres opciones que no vas a seguir.
-- {WORKFLOW}
+- {flujo}
 - Cita las fuentes (nombre del documento) en reportes y respuestas.
 - Responde en español.
 """
+
+
+SYSTEM_PROMPT = system_prompt(network=True)

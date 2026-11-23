@@ -1,8 +1,9 @@
 """Variante LOCAL y gratuita del orquestador (Ollama en vez de Claude).
 
 Idéntico propósito que `src/main.py`, pero el "cerebro" es un modelo local
-servido por Ollama: 0 € por token, sin API key y sin que los documentos salgan
-de tu máquina. Reutiliza tal cual las tools (Fase 2) y el motor RAG (Fase 3).
+servido por Ollama: 0 € por token, sin API key y sin enviar los documentos a una
+API de LLM. Reutiliza tal cual las tools (Fase 2) y el motor RAG (Fase 3). Las
+tools de referencias sí salen a internet; `JEICOB_ENABLE_NETWORK=0` las quita.
 
 Como Ollama no ofrece un Tool Runner, el bucle ReAct (llamada -> ejecutar tool
 -> devolver resultado -> repetir) se implementa a mano aquí.
@@ -25,8 +26,8 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from . import references, tools
-from .prompts import SYSTEM_PROMPT
+from . import config, references, tools
+from .prompts import system_prompt
 from .rag import RAGEngine
 
 console = Console()
@@ -210,6 +211,16 @@ TOOL_SCHEMAS = [
     },
 ]
 
+# Con JEICOB_ENABLE_NETWORK=0 el modelo no ve las tools con salida a internet
+# (y si aun así las pide, _run_tool responde "tool desconocida").
+_NETWORK_TOOL_NAMES = {"search_references", "download_reference"}
+if not config.NETWORK_ENABLED:
+    TOOL_SCHEMAS = [
+        t for t in TOOL_SCHEMAS if t["function"]["name"] not in _NETWORK_TOOL_NAMES
+    ]
+
+SYSTEM_PROMPT = system_prompt(network=config.NETWORK_ENABLED)
+
 # Mapa nombre-de-tool -> función real (Fases 2 y 3).
 DISPATCH = {
     "read_directory": lambda: tools.read_directory(),
@@ -222,6 +233,8 @@ DISPATCH = {
     "download_reference": lambda url, filename: _download_and_index(url, filename),
     "write_summary": lambda **kw: tools.write_summary(**kw),
 }
+if not config.NETWORK_ENABLED:
+    DISPATCH = {k: v for k, v in DISPATCH.items() if k not in _NETWORK_TOOL_NAMES}
 
 
 def _run_tool(name: str, args: dict) -> str:
@@ -291,7 +304,9 @@ def main() -> None:
     console.print(
         Panel.fit(
             "[bold]jeicob[/] (local) — agente de investigación · [green]0 € · sin API key[/]\n"
-            f"Modelo Ollama: [cyan]{MODEL}[/]  ·  Escribe [bold]salir[/] para terminar.",
+            f"Modelo Ollama: [cyan]{MODEL}[/]  ·  "
+            f"Red: {'sí' if config.NETWORK_ENABLED else '[yellow]desactivada[/]'}  ·  "
+            "Escribe [bold]salir[/] para terminar.",
             border_style="green",
         )
     )
