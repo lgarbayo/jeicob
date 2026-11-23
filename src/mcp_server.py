@@ -39,6 +39,7 @@ import time
 import urllib.parse
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -49,7 +50,9 @@ from mcp.server.mcpserver.exceptions import (
     ResourceNotFoundError,
     ToolError,
 )
+from mcp.shared.exceptions import MCPError
 from mcp.types import (
+    INVALID_PARAMS,
     Completion,
     PromptReference,
     ResourceTemplateReference,
@@ -101,8 +104,12 @@ class RagService:
     - El motor se abre en la primera llamada y se cierra tras
       `idle_release` segundos sin uso: así se libera el lock de
       `.qdrant_data` para el CLI u otras sesiones.
-    - Si el lock lo tiene otro proceso, reintenta hasta `lock_timeout`
-      segundos y después falla con un mensaje accionable.
+    - Si el lock lo tiene otro proceso, cada petición espera como mucho
+      `lock_timeout` segundos **desde que se hizo** (no desde que le toca el
+      turno): N peticiones en cola no suman N plazos.
+    - Al cerrar el servidor o cancelar una llamada, la ingesta en curso se
+      detiene entre documento y documento, y las peticiones en cola no llegan a
+      ejecutarse.
     """
 
     def __init__(self, idle_release: float, lock_timeout: float) -> None:
@@ -113,15 +120,19 @@ class RagService:
         self._timer: threading.Timer | None = None
         self._timer_lock = threading.Lock()
         self._last_used = 0.0
+        self._stopping = threading.Event()
+
+    @property
+    def stopping(self) -> bool:
+        return self._stopping.is_set()
 
     # Todo lo de abajo con prefijo _sync corre en el hilo "rag".
 
-    def _sync_open(self) -> "RAGEngine":
+    def _sync_open(self, deadline: float) -> "RAGEngine":
         if self._engine is not None:
             return self._engine
         from .rag import RAGEngine  # import diferido: qdrant/fastembed pesan
 
-        limite = time.monotonic() + self._lock_timeout
         while True:
             try:
                 self._engine = RAGEngine()
@@ -130,7 +141,7 @@ class RagService:
             except RuntimeError as exc:
                 if "already accessed" not in str(exc):
                     raise
-                if time.monotonic() >= limite:
+                if time.monotonic() >= deadline or self._stopping.is_set():
                     raise ToolError(
                         "La base vectorial está en uso por otro proceso (el CLI "
                         "`src.main` u otra sesión MCP). Ciérralo y reintenta; para "
@@ -152,38 +163,82 @@ class RagService:
             self._engine.close()
             self._engine = None
 
+    def _submit_idle_close(self) -> None:
+        try:
+            self._executor.submit(self._sync_close_if_idle)
+        except RuntimeError:  # executor ya cerrado (apagado del servidor)
+            pass
+
     def _schedule_release(self) -> None:
         with self._timer_lock:
             if self._timer is not None:
                 self._timer.cancel()
-            self._timer = threading.Timer(
-                self._idle_release,
-                lambda: self._executor.submit(self._sync_close_if_idle),
-            )
+            if self._stopping.is_set():
+                return
+            self._timer = threading.Timer(self._idle_release, self._submit_idle_close)
             self._timer.daemon = True
             self._timer.start()
 
-    async def run(self, fn: Callable[["RAGEngine"], Any]) -> Any:
-        """Ejecuta `fn(engine)` en el hilo de Qdrant y devuelve su resultado."""
+    async def run(self, fn: Callable[["RAGEngine", Callable[[], bool]], Any]) -> Any:
+        """Ejecuta `fn(engine, should_stop)` en el hilo de Qdrant.
+
+        `should_stop()` pasa a True si el cliente cancela la llamada o el
+        servidor se está cerrando; las operaciones largas (la ingesta) lo
+        consultan para abandonar a tiempo. Las excepciones inesperadas llegan
+        al cliente como `ToolError` con su tipo y mensaje.
+        """
+        cancelada = threading.Event()
+        deadline = time.monotonic() + self._lock_timeout
+
+        def should_stop() -> bool:
+            return cancelada.is_set() or self._stopping.is_set()
 
         def job() -> Any:
+            if should_stop():
+                raise ToolError("Operación cancelada: el servidor se está cerrando.")
             try:
-                return fn(self._sync_open())
+                return fn(self._sync_open(deadline), should_stop)
+            except ToolError:
+                raise
+            except Exception as exc:
+                log.warning("Fallo en la base vectorial: %s", type(exc).__name__)
+                raise ToolError(
+                    f"Error interno de la base vectorial ({type(exc).__name__}): {exc}"
+                ) from exc
             finally:
                 self._last_used = time.monotonic()
+                if self._stopping.is_set():
+                    self._sync_close()
 
         loop = asyncio.get_running_loop()
         try:
             return await loop.run_in_executor(self._executor, job)
+        except asyncio.CancelledError:
+            cancelada.set()
+            raise
         finally:
             self._schedule_release()
 
-    def shutdown(self) -> None:
+    def shutdown(self, timeout: float = 2.0) -> None:
+        """Detiene el servicio y libera Qdrant.
+
+        No bloquea el cierre más de `timeout` segundos: si hay una ingesta en
+        marcha, esta se detiene al terminar el documento actual y cierra Qdrant
+        ella misma (ver `job()`); las peticiones en cola se descartan.
+        """
+        self._stopping.set()
         with self._timer_lock:
             if self._timer is not None:
                 self._timer.cancel()
-        self._executor.submit(self._sync_close).result(timeout=30)
-        self._executor.shutdown(wait=True)
+        cierre = self._executor.submit(self._sync_close)
+        self._executor.shutdown(wait=False)
+        try:
+            cierre.result(timeout=timeout)
+        except FuturesTimeout:
+            log.warning(
+                "Cierre con una operación en curso: Qdrant se liberará al "
+                "terminar el documento actual."
+            )
 
 
 _rag = RagService(IDLE_RELEASE_S, LOCK_TIMEOUT_S)
@@ -216,9 +271,9 @@ jeicob: herramientas para investigar literatura científica (3D Gaussian \
 Splatting, DICOM, normativas clínicas) con RAG local y escribir reportes en \
 Markdown.
 
-{prompts.TOOLS_GUIDE}
+{prompts.tools_guide(network=NETWORK_ENABLED)}
 
-{prompts.WORKFLOW}
+{prompts.WORKFLOW if NETWORK_ENABLED else prompts.WORKFLOW_LOCAL}
 
 Formato de los reportes: {prompts.REPORT_RULES}
 """
@@ -231,13 +286,21 @@ REPORTS_URI = "jeicob://reports/"
 RESOURCE_CHARS = 60_000
 
 
+# Formatos que read_file sabe leer: lo que se anuncia como resource tiene que
+# poder leerse después.
+_KB_SUFFIXES = {".pdf", *tools._TEXT_SUFFIXES}
+
+
 def _report_files() -> list[Path]:
     if not tools.DOCS_OUTPUT_DIR.is_dir():
         return []
     return sorted(
         p
-        for p in tools.DOCS_OUTPUT_DIR.glob("*.md")
-        if p.is_file() and not p.name.startswith(("_", "."))
+        for p in tools.DOCS_OUTPUT_DIR.iterdir()
+        # write_summary conserva la extensión que le dan (.md, .MD, .Md).
+        if p.suffix.lower() == ".md"
+        and p.is_file()
+        and not p.name.startswith(("_", "."))
     )
 
 
@@ -249,9 +312,11 @@ def _kb_files() -> list[str]:
         rel = p.relative_to(tools.KNOWLEDGE_BASE_DIR)
         if p.is_dir() or any(parte.startswith(".") for parte in rel.parts):
             continue
+        if p.suffix.lower() not in _KB_SUFFIXES:
+            continue
         if not tools._is_within(tools.KNOWLEDGE_BASE_DIR, p):
             continue
-        rutas.append(str(rel))
+        rutas.append(rel.as_posix())
     return rutas
 
 
@@ -284,8 +349,55 @@ class JeicobServer(MCPServer):
             )
         return recursos
 
+    async def get_prompt(self, name: str, arguments=None, context=None):
+        # El SDK convierte cualquier fallo de un prompt en -32603 (error
+        # interno); un prompt desconocido o sin sus argumentos obligatorios es
+        # un fallo del cliente y debe llegar como INVALID_PARAMS.
+        prompt = self._prompt_manager.get_prompt(name)
+        if prompt is None:
+            raise MCPError(INVALID_PARAMS, f"Prompt desconocido: {name}")
+        faltan = [
+            a.name
+            for a in (prompt.arguments or [])
+            if a.required and not (arguments or {}).get(a.name)
+        ]
+        if faltan:
+            raise MCPError(
+                INVALID_PARAMS,
+                f"Faltan argumentos obligatorios del prompt '{name}': "
+                + ", ".join(faltan),
+            )
+        return await super().get_prompt(name, arguments, context)
+
 
 _AUDITED = {"tools/call", "resources/read", "prompts/get"}
+
+# El log de auditoría solo escribe valores de estos conjuntos cerrados: un
+# nombre o una URI elegidos por el cliente podrían llevar saltos de línea
+# (falsificar entradas) o datos clínicos.
+_AUDIT_NAMES = {
+    "read_directory",
+    "read_file",
+    "write_summary",
+    "ingest_corpus",
+    "search_corpus",
+    "search_references",
+    "download_reference",
+    "research_report",
+    "summarize_document",
+    "ask_corpus",
+}
+_AUDIT_RESOURCE_KINDS = {"knowledge", "reports"}
+
+
+def _audit_target(metodo: str, params: dict) -> str:
+    if metodo == "resources/read":
+        uri = str(params.get("uri", ""))
+        partes = uri.split("/")
+        tipo = partes[2] if uri.startswith("jeicob://") and len(partes) > 2 else ""
+        return tipo if tipo in _AUDIT_RESOURCE_KINDS else "?"
+    nombre = params.get("name")
+    return nombre if nombre in _AUDIT_NAMES else "?"
 
 
 async def _audit(ctx: Any, call_next: Callable) -> Any:
@@ -296,15 +408,12 @@ async def _audit(ctx: Any, call_next: Callable) -> Any:
     tipo (knowledge / reports).
     """
     metodo = getattr(ctx, "method", None)
-    if metodo not in _AUDITED:
+    # Sin request_id es una notificación: el servidor no la ejecuta como
+    # petición, así que no hay nada que auditar.
+    if metodo not in _AUDITED or getattr(ctx, "request_id", None) is None:
         return await call_next(ctx)
     params = getattr(ctx, "params", None)
-    params = params if isinstance(params, dict) else {}
-    if metodo == "resources/read":
-        uri = str(params.get("uri", ""))
-        objetivo = uri.split("/")[2] if uri.startswith("jeicob://") else "?"
-    else:
-        objetivo = str(params.get("name", "?"))
+    objetivo = _audit_target(metodo, params if isinstance(params, dict) else {})
     inicio = time.monotonic()
     estado = "ok"
     try:
@@ -358,9 +467,16 @@ async def _notify_resources_changed(ctx: Context) -> None:
         log.debug("send_resource_list_changed falló: %s", exc)
 
 
+# Prefijos exactos con los que tools.py, rag.py y references.py señalan un
+# fallo. Se comparan literalmente: un texto que empiece por "ERRORES" o
+# "ERROR 404" no es un fallo. (read_file, que devuelve contenido arbitrario,
+# no pasa por aquí: usa la excepción de tools.read_chunk.)
+_ERROR_PREFIXES = ("ERROR: ", "ERROR al ")
+
+
 def _ok(resultado: str) -> str:
     """Convierte la convención `"ERROR: ..."` de las tools en un error MCP."""
-    if resultado.startswith("ERROR"):
+    if resultado.startswith(_ERROR_PREFIXES):
         raise ToolError(resultado)
     return resultado
 
@@ -386,9 +502,15 @@ def read_file(path: str, offset: int = 0, max_chars: int = MCP_READ_CHARS) -> st
         path: Ruta del documento relativa a knowledge_base/ (la que da
             read_directory).
         offset: Carácter desde el que leer (0 = inicio).
-        max_chars: Tamaño máximo del tramo (por defecto 20000).
+        max_chars: Tamaño máximo del tramo (por defecto y como máximo 20000).
     """
-    return _ok(tools.read_file(path, offset=offset, max_chars=max_chars))
+    # Tope propio de la capa MCP: un tramo mayor desborda el límite de salida
+    # de las tools del cliente (tools.MAX_READ_CHARS es para el CLI).
+    max_chars = min(max_chars, MCP_READ_CHARS)
+    try:
+        return tools.read_chunk(path, offset=offset, max_chars=max_chars)
+    except tools.ReadError as exc:
+        raise ToolError(f"ERROR: {exc}") from exc
 
 
 @mcp.tool(
@@ -451,7 +573,8 @@ async def write_summary(
     title="Indexar corpus",
     annotations=ToolAnnotations(
         readOnlyHint=False,
-        destructiveHint=False,
+        # Poda del índice los documentos que ya no están en knowledge_base/.
+        destructiveHint=True,
         idempotentHint=True,
         openWorldHint=False,
     ),
@@ -468,12 +591,23 @@ async def ingest_corpus(ctx: Context, force: bool = False) -> str:
     loop = asyncio.get_running_loop()
 
     def progreso(i: int, total: int, fichero: str) -> None:
-        asyncio.run_coroutine_threadsafe(
-            ctx.report_progress(i, total, message=f"Indexando {fichero}"), loop
-        )
+        # Corre en el hilo rag: si el servidor se cierra, el loop puede no
+        # existir ya; el progreso es best effort.
+        if _rag.stopping or loop.is_closed():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                ctx.report_progress(i, total, message=f"Indexando {fichero}"), loop
+            )
+        except RuntimeError:
+            pass
 
     return _ok(
-        await _rag.run(lambda rag: rag.ingest_directory(force=force, progress=progreso))
+        await _rag.run(
+            lambda rag, should_stop: rag.ingest_directory(
+                force=force, progress=progreso, should_stop=should_stop
+            )
+        )
     )
 
 
@@ -491,7 +625,7 @@ async def search_corpus(
         source: Limitar la búsqueda a un documento (ruta relativa a
             knowledge_base/).
     """
-    return _ok(await _rag.run(lambda rag: rag.query(question, top_k, source)))
+    return _ok(await _rag.run(lambda rag, _stop: rag.query(question, top_k, source)))
 
 
 # --- Tools de red (desactivables con JEICOB_ENABLE_NETWORK=0) -----------------
@@ -523,8 +657,17 @@ async def download_reference(ctx: Context, url: str, filename: str) -> str:
         await asyncio.to_thread(references.download_reference, url, filename)
     )
     nombre = references.normalized_pdf_name(filename)
-    indexado = _ok(await _rag.run(lambda rag: rag.ingest_file(nombre)))
-    await _notify_resources_changed(ctx)
+    # El PDF ya está en disco: aunque falle el indexado, la descarga se
+    # confirma (y se avisa del documento nuevo) en vez de perderse en un error.
+    try:
+        indexado = _ok(await _rag.run(lambda rag, _stop: rag.ingest_file(nombre)))
+    except ToolError as exc:
+        indexado = (
+            f"AVISO: el PDF se guardó pero no se pudo indexar ({exc}). "
+            "Ejecuta ingest_corpus más tarde."
+        )
+    finally:
+        await _notify_resources_changed(ctx)
     return f"{descarga}\n{indexado}"
 
 
@@ -559,14 +702,14 @@ if NETWORK_ENABLED:
     mime_type="text/plain",
 )
 def knowledge_resource(path: str) -> str:
-    texto = tools.read_file(
-        urllib.parse.unquote(path), offset=0, max_chars=RESOURCE_CHARS
-    )
-    if texto.startswith("ERROR"):
-        if "no existe" in texto:
-            raise ResourceNotFoundError(texto)
-        raise ResourceError(texto)
-    return texto
+    # `path` llega ya decodificado por el SDK: decodificarlo otra vez rompería
+    # los nombres que contienen un "%XX" literal.
+    try:
+        return tools.read_chunk(path, offset=0, max_chars=RESOURCE_CHARS)
+    except tools.ReadError as exc:
+        if exc.not_found:
+            raise ResourceNotFoundError(str(exc)) from exc
+        raise ResourceError(str(exc)) from exc
 
 
 @mcp.resource(
@@ -577,7 +720,7 @@ def knowledge_resource(path: str) -> str:
     mime_type="text/markdown",
 )
 def report_resource(name: str) -> str:
-    nombre = urllib.parse.unquote(name)
+    nombre = name  # ya decodificado por el SDK (ver knowledge_resource)
     try:
         ruta = tools._resolve_within(tools.DOCS_OUTPUT_DIR, nombre)
     except ValueError as exc:
@@ -644,15 +787,21 @@ Responde en español."""
 async def _complete(ref, argument, _context) -> Completion | None:
     """Autocompleta rutas de documentos y nombres de reportes."""
     candidatos: list[str] = []
+    es_plantilla = isinstance(ref, ResourceTemplateReference)
     if argument.name == "path" and (
-        isinstance(ref, ResourceTemplateReference)
+        es_plantilla
         or (isinstance(ref, PromptReference) and ref.name == "summarize_document")
     ):
         candidatos = _kb_files()
-    elif argument.name == "name" and isinstance(ref, ResourceTemplateReference):
+    elif argument.name == "name" and es_plantilla:
         candidatos = [p.name for p in _report_files()]
     if not candidatos:
         return None
+    if es_plantilla:
+        # El valor se sustituye tal cual en la URI: un "#" o "?" sin codificar
+        # la partiría. {+path} admite "/", {name} no.
+        seguro = "/" if argument.name == "path" else ""
+        candidatos = [urllib.parse.quote(c, safe=seguro) for c in candidatos]
     prefijo = (argument.value or "").lower()
     valores = [c for c in candidatos if c.lower().startswith(prefijo)]
     return Completion(
@@ -661,11 +810,18 @@ async def _complete(ref, argument, _context) -> Completion | None:
 
 
 def main() -> None:
+    # force=True: sustituye el RichHandler que instala el SDK (parte las
+    # líneas a 80 columnas e ignora este formato).
     logging.basicConfig(
         stream=sys.stderr,
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        force=True,
     )
+    # Los INFO del SDK ("Tool X failed: <mensaje>") repiten rutas, URLs y
+    # textos de error de las peticiones; nuestra auditoría ya registra el
+    # resultado sin contenido.
+    logging.getLogger("mcp").setLevel(logging.WARNING)
     log.info(
         "jeicob MCP · KB=%s · salida=%s · red=%s",
         config.KNOWLEDGE_BASE_DIR,

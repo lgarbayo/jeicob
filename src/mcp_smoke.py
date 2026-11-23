@@ -3,7 +3,8 @@
 Arranca `python -m src.mcp_server` como subproceso, con knowledge_base,
 docs_output y Qdrant temporales (no toca tus datos), y comprueba:
 
-  - que lista las tools esperadas y que stdout solo lleva JSON-RPC;
+  - que lista las tools esperadas y que stdout solo lleva JSON-RPC (cualquier
+    línea que no lo sea llega al `message_handler` como excepción);
   - lectura, paginación y sandbox de read_file;
   - validación y escritura de write_summary;
   - que los errores llegan como `isError=true`.
@@ -24,6 +25,7 @@ from pathlib import Path
 import anyio
 from mcp import Client, StdioServerParameters
 from mcp.shared.exceptions import MCPError
+from mcp.types import INVALID_PARAMS, ResourceTemplateReference
 
 from . import config
 
@@ -51,6 +53,23 @@ async def _run(full: bool) -> None:
             "El estándar DICOM define el formato de imágenes médicas. " * 40,
             encoding="utf-8",
         )
+        # Contenido legítimo que empieza por "ERROR": no es un fallo.
+        (kb / "errores.md").write_text(
+            "ERROR: así titula el paper su sección sobre errores de medida.",
+            encoding="utf-8",
+        )
+        # Un "%41" literal en el nombre (no debe decodificarse dos veces).
+        (kb / "lit%41.md").write_text("Nombre con porcentaje.", encoding="utf-8")
+        # Formato no legible: no debe anunciarse como resource.
+        (kb / "imagen.png").write_bytes(b"\x89PNG")
+        out.mkdir()
+        (out / "MAYUS.MD").write_text("# Reporte en mayúsculas\n", encoding="utf-8")
+
+        ajenos: list[Exception] = []
+
+        async def on_message(mensaje) -> None:
+            if isinstance(mensaje, Exception):
+                ajenos.append(mensaje)
 
         params = StdioServerParameters(
             command=sys.executable,
@@ -67,7 +86,9 @@ async def _run(full: bool) -> None:
             },
         )
 
-        async with Client(params, read_timeout_seconds=300) as c:
+        async with Client(
+            params, read_timeout_seconds=300, message_handler=on_message
+        ) as c:
             nombres = {t.name for t in (await c.list_tools()).tools}
             assert nombres == EXPECTED_TOOLS, nombres
             print("tools:", ", ".join(sorted(nombres)))
@@ -77,6 +98,11 @@ async def _run(full: bool) -> None:
 
             r = await c.call_tool("read_file", {"path": "dicom.md", "max_chars": 100})
             assert not r.is_error and "offset=100" in _text(r), _text(r)
+
+            r = await c.call_tool("read_file", {"path": "errores.md"})
+            assert not r.is_error and _text(r).startswith("ERROR: así"), _text(r)
+            r = await c.call_tool("read_file", {"path": "dicom.md", "max_chars": 10**6})
+            assert not r.is_error and len(_text(r)) <= 20_000 + 200, len(_text(r))
 
             r = await c.call_tool("read_file", {"path": "../pyproject.toml"})
             assert r.is_error and "fuera del directorio" in _text(r), _text(r)
@@ -112,6 +138,19 @@ async def _run(full: bool) -> None:
                 },
             )
             assert r.is_error and "overwrite" in _text(r), _text(r)
+            r = await c.call_tool(
+                "write_summary",
+                {
+                    "filename": "escape.md",
+                    "title": "DICOM",
+                    "abstract": "Resumen breve.",
+                    "full_explanation": "Otra explicación más larga que el abstract.",
+                    "overwrite": True,
+                },
+            )
+            assert not r.is_error and "Otra" in (out / "escape.md").read_text(), _text(
+                r
+            )
             print("write_summary: validación, sandbox y no sobrescritura OK")
 
             # SSRF: ninguno de estos destinos llega a abrir conexión.
@@ -119,6 +158,10 @@ async def _run(full: bool) -> None:
                 "http://169.254.169.254/latest/meta-data/",
                 "http://127.0.0.1:6333/collections",
                 "http://[::1]/a.pdf",
+                "http://[64:ff9b::a9fe:a9fe]/a.pdf",  # NAT64 -> 169.254.169.254
+                "http://[2002:7f00:1::]/a.pdf",  # 6to4 -> 127.0.0.1
+                "http://[::7f00:1]/a.pdf",  # IPv4-compatible -> 127.0.0.1
+                "http://example.org:99999/a.pdf",  # puerto inválido
                 "file:///etc/passwd",
             ):
                 r = await c.call_tool(
@@ -127,6 +170,7 @@ async def _run(full: bool) -> None:
                 assert r.is_error and (
                     "no es una dirección pública" in _text(r)
                     or "esquema no permitido" in _text(r)
+                    or "puerto no válido" in _text(r)
                 ), (url, _text(r))
             assert not (kb / "x.pdf").exists()
             print("download_reference: protección SSRF OK")
@@ -134,10 +178,22 @@ async def _run(full: bool) -> None:
             uris = {str(r.uri) for r in (await c.list_resources()).resources}
             assert uris == {
                 "jeicob://knowledge/dicom.md",
+                "jeicob://knowledge/errores.md",
+                "jeicob://knowledge/lit%2541.md",
                 "jeicob://reports/escape.md",
+                "jeicob://reports/MAYUS.MD",
             }, uris
             rr = await c.read_resource("jeicob://knowledge/dicom.md")
             assert "DICOM" in rr.contents[0].text
+            rr = await c.read_resource("jeicob://knowledge/lit%2541.md")
+            assert "porcentaje" in rr.contents[0].text
+            rr = await c.read_resource("jeicob://reports/MAYUS.MD")
+            assert "mayúsculas" in rr.contents[0].text
+            comp = await c.complete(
+                ResourceTemplateReference(uri="jeicob://knowledge/{+path}"),
+                {"name": "path", "value": "lit"},
+            )
+            assert comp.completion.values == ["lit%2541.md"], comp.completion
             try:
                 await c.read_resource("jeicob://reports/..%2F..%2Fpyproject.toml")
                 raise AssertionError("un resource ha escapado de docs_output/")
@@ -147,6 +203,12 @@ async def _run(full: bool) -> None:
             assert nombres_p == {"research_report", "summarize_document", "ask_corpus"}
             g = await c.get_prompt("summarize_document", {"path": "dicom.md"})
             assert "dicom.md" in g.messages[0].content.text
+            for nombre, args in (("summarize_document", {}), ("no_existe", {})):
+                try:
+                    await c.get_prompt(nombre, args)
+                    raise AssertionError(f"get_prompt({nombre}) debería fallar")
+                except MCPError as exc:
+                    assert exc.error.code == INVALID_PARAMS, exc.error
             print("resources y prompts OK")
 
             if full:
@@ -159,6 +221,7 @@ async def _run(full: bool) -> None:
                     "ingest_corpus", {}, progress_callback=on_progress
                 )
                 assert not r.is_error and "Ingerido 'dicom.md'" in _text(r), _text(r)
+                assert "Ingerido 'errores.md'" in _text(r), _text(r)
                 assert avances and "dicom.md" in (avances[0][2] or ""), avances
                 r = await c.call_tool("ingest_corpus", {})
                 assert "Sin cambios 'dicom.md'" in _text(r), _text(r)
@@ -181,6 +244,9 @@ async def _run(full: bool) -> None:
                 r = await c.call_tool("search_corpus", {"question": "DICOM"})
                 assert not r.is_error, _text(r)
                 print("RAG: liberación del lock y error de lock ocupado OK")
+
+        assert not ajenos, f"stdout llevó algo que no es JSON-RPC: {ajenos}"
+        print("stdout: solo JSON-RPC OK")
 
     print("OK: servidor MCP verificado por stdio.")
 

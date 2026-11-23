@@ -197,7 +197,10 @@ uv run python -m src.rag --prefetch
 
 **Claude Code** — el repo ya trae un `.mcp.json` con el servidor `jeicob`. Abre
 `claude` en la raíz del repo, aprueba el servidor cuando te lo pida y comprueba
-con `/mcp` que está conectado. Desde cualquier otro directorio:
+con `/mcp` que está conectado. Ese `.mcp.json` lanza `python -m src.mcp_server`
+con rutas relativas, así que **solo funciona si Claude Code arranca en la raíz
+del repo**. Para usarlo desde cualquier otro directorio, regístralo con ruta
+absoluta:
 
 ```bash
 claude mcp add jeicob -- uv --directory /ruta/absoluta/a/jeicob run --extra mcp python -m src.mcp_server
@@ -223,11 +226,11 @@ Lo que ve el cliente:
 | Tool | Notas MCP |
 |------|-----------|
 | `read_directory` | Solo lectura |
-| `read_file(path, offset=0, max_chars=20000)` | Solo lectura; tramos de 20 000 caracteres para no superar el límite de salida del cliente |
-| `ingest_corpus(force=False)` | Idempotente; envía notificaciones de progreso por documento |
+| `read_file(path, offset=0, max_chars=20000)` | Solo lectura; tramos de 20 000 caracteres como máximo, para no superar el límite de salida del cliente |
+| `ingest_corpus(force=False)` | Idempotente; envía progreso por documento; marcada como destructiva porque poda del índice lo que ya no está en disco. Si fallan algunos documentos, el resultado lo resume sin ser un error |
 | `search_corpus(question, top_k=5, source=None)` | Solo lectura; `source` limita a un documento |
 | `search_references(query, limit=5)` | Red (Semantic Scholar / arXiv) |
-| `download_reference(url, filename)` | Red; descarga e indexa; nunca sobrescribe; protección SSRF |
+| `download_reference(url, filename)` | Red; descarga e indexa; nunca sobrescribe; protección SSRF. Si el indexado falla, confirma la descarga con un aviso |
 | `write_summary(..., overwrite=False)` | Escribe en `docs_output/`; solo reemplaza con `overwrite=true` |
 
 Además de tools, el servidor ofrece **resources** y **prompts**:
@@ -253,8 +256,10 @@ y los errores llegan como `isError` para que el modelo los corrija.
 **Concurrencia con el CLI.** Qdrant en modo local bloquea `.qdrant_data/` para un
 único proceso. El servidor abre la base solo cuando una tool la necesita y la
 **libera tras 30 s sin uso**, así que puedes alternar entre el servidor MCP y
-`src.main`. Si otro proceso la tiene abierta, la tool espera unos segundos y
-devuelve un error claro. Usarlos *a la vez* requiere Qdrant en servidor.
+`src.main`. Si otro proceso la tiene abierta, la tool espera unos segundos (como
+mucho `JEICOB_QDRANT_LOCK_TIMEOUT` desde que se pidió, aunque haya varias en
+cola) y devuelve un error claro. Al cerrar el servidor, una ingesta en curso se
+detiene al terminar el documento actual y libera la base. Usarlos *a la vez* requiere Qdrant en servidor.
 
 Variables propias del servidor:
 
@@ -398,7 +403,7 @@ dependencias ni API keys nuevas**.
   `ingest_corpus` aparte: queda consultable al instante). **Confinado a esa
   carpeta** (mismo sandbox que `write_summary`: nombre base + `.pdf`), solo acepta
   `http(s)` hacia **IPs públicas** (protección SSRF de `netguard.py`, ver §8),
-  **valida que sea un PDF** (cabecera `%PDF`), limita el tamaño a 50 MB y **no
+  **valida que sea un PDF** (cabecera `%PDF-` en el primer KB), limita el tamaño a 50 MB y **no
   sobrescribe** un fichero existente.
   La descarga vive en `references.py` (desacoplada); el auto-indexado se compone en
   el orquestador, que ya tiene el `RAGEngine` a mano.
@@ -449,8 +454,11 @@ tool); "Fuente" y "Puntos clave" son opcionales.
   `169.254.169.254`…), y la IP se vuelve a comprobar en el socket ya conectado,
   antes del TLS, para que el *DNS rebinding* no sirva. Cada redirección (máx. 5)
   se revalida, no se usan proxies del entorno y se puede restringir a una lista
-  de dominios (`JEICOB_DOWNLOAD_ALLOWED_HOSTS`). El fichero debe empezar por la
-  cabecera `%PDF`, pesar ≤ 50 MB y **no sobrescribe** nada de `knowledge_base/`.
+  de dominios (`JEICOB_DOWNLOAD_ALLOWED_HOSTS`). También se rechazan las IPv6 que
+  llevan dentro una IPv4 no pública (NAT64, 6to4, Teredo, IPv4-compatible). El
+  fichero debe llevar la cabecera `%PDF-` en su primer KB (como admiten los
+  lectores de PDF), pesar ≤ 50 MB y descargarse en menos de 120 s, y **no
+  sobrescribe** nada de `knowledge_base/`.
 - **PDFs**: como mucho 3000 páginas por documento, para que un PDF hostil no deje
   al servidor parseando sin fin.
 - **Tools de red desactivables** en el servidor MCP (`JEICOB_ENABLE_NETWORK=0`):

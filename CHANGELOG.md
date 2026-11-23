@@ -20,6 +20,16 @@ and this project adheres to
   `overwrite=true`.
 - PDFs over 3000 pages are rejected.
 - MCP server audit log (tool/resource/prompt, outcome, duration; no content).
+  Only names from a fixed set are logged (no log forging), notifications are
+  skipped, and the SDK's own INFO logs (which echo paths and error text) are
+  silenced.
+- The SSRF guard also rejects IPv6 addresses that embed a non-public IPv4
+  (NAT64, 6to4, Teredo, IPv4-compatible) and URLs with an invalid port.
+- Downloads have a 120 s overall deadline (a slow-drip server can no longer
+  hang the tool).
+- `write_summary` creates new reports atomically (`open("x")`), closing a
+  check-then-write race; string flags such as `overwrite="false"` from local
+  LLMs are parsed as booleans.
 
 ### Fixed
 
@@ -27,7 +37,24 @@ and this project adheres to
   SHA-256 mean re-running `ingest_corpus` no longer duplicates chunks; changed
   files are re-indexed and files removed from `knowledge_base/` are pruned.
 
+- MCP server: shutting down during an ingestion no longer hangs for 30 s or
+  leaves Qdrant locked; cancelled calls stop the ingestion between documents;
+  queued calls share the lock wait deadline.
+- MCP server: a document whose text starts with "ERROR" is no longer reported
+  as a failure; a partial ingestion failure is summarised instead of flagging
+  the whole call based on file order; unexpected RAG errors carry their cause.
+- MCP resources are no longer URL-decoded twice; `.MD` reports and only
+  readable formats are listed; completions are URL-quoted for templates;
+  unknown prompts or missing prompt arguments return `INVALID_PARAMS`.
+- MCP `download_reference` keeps the download confirmation (and notifies the
+  client) when only the indexing step fails.
+- `read_directory` reports a missing knowledge base as an error.
+
 ### Changed
+
+- With `JEICOB_ENABLE_NETWORK=0` the MCP instructions no longer mention the
+  network tools; `ingest_corpus` is annotated as destructive (it prunes the
+  index); MCP `read_file` caps `max_chars` at 20 000.
 
 - `read_file` reads long documents in pages (`offset`, `max_chars`) and caches
   extracted text.
