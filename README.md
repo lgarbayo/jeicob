@@ -117,6 +117,10 @@ Variables de entorno (`.env`):
 Las rutas relativas se resuelven contra `JEICOB_HOME` (la raíz del repo), **no**
 contra el directorio desde el que lances el proceso (ver `src/config.py`).
 
+Los flags booleanos aceptan `1`/`true`/`yes`/`sí`/`on` y `0`/`false`/`no`/`off`
+(o vacío). Un valor distinto se avisa por stderr; en `JEICOB_ENABLE_NETWORK`
+desactiva la red (falla cerrado) y en los demás se usa el valor por defecto.
+
 > **Tip:** `uv run python -m src.rag --prefetch` descarga el modelo de embeddings
 > (~0.22 GB) de antemano, para que la primera consulta no tenga que esperar.
 

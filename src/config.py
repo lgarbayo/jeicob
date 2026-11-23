@@ -29,8 +29,11 @@ transporte stdio de MCP).
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+
+_log = logging.getLogger("jeicob.config")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -45,13 +48,46 @@ except ImportError:  # pragma: no cover — python-dotenv es dependencia base
     pass
 
 
-def env_flag(name: str, default: bool) -> bool:
-    """Lee un flag booleano del entorno ("0", "false", "no", "off" o vacío
-    son falsos; cualquier otro valor, verdadero)."""
+_TRUE = {"1", "true", "yes", "si", "sí", "on"}
+_FALSE = {"0", "false", "no", "off", ""}
+
+
+def env_flag(name: str, default: bool, on_unknown: bool | None = None) -> bool:
+    """Lee un flag booleano del entorno.
+
+    Verdaderos: 1, true, yes, si, sí, on. Falsos: 0, false, no, off o vacío
+    (sin distinguir mayúsculas). Cualquier otro valor (p. ej. "desactivado")
+    se avisa por stderr y vale `on_unknown` (o `default` si no se indica):
+    así un interruptor de seguridad puede fallar cerrado.
+    """
     valor = os.getenv(name)
     if valor is None:
         return default
-    return valor.strip().lower() not in {"0", "false", "no", "off", ""}
+    normalizado = valor.strip().lower()
+    if normalizado in _TRUE:
+        return True
+    if normalizado in _FALSE:
+        return False
+    resultado = default if on_unknown is None else on_unknown
+    _log.warning(
+        "%s=%r no es un valor reconocido (usa 1 o 0); se toma %s.",
+        name,
+        valor,
+        "1" if resultado else "0",
+    )
+    return resultado
+
+
+def env_float(name: str, default: float) -> float:
+    """Lee un número del entorno; si no es válido, avisa y usa `default`."""
+    valor = os.getenv(name)
+    if valor is None or not valor.strip():
+        return default
+    try:
+        return float(valor)
+    except ValueError:
+        _log.warning("%s=%r no es un número; se toma %s.", name, valor, default)
+        return default
 
 
 def _resolve(value: str | None, default: Path, base: Path) -> Path:
@@ -79,7 +115,9 @@ FASTEMBED_CACHE_PATH: Path = _resolve(
 )
 
 # Tools con salida a internet (search_references, download_reference).
-NETWORK_ENABLED: bool = env_flag("JEICOB_ENABLE_NETWORK", True)
+# Un valor no reconocido desactiva la red (falla cerrado): si alguien escribe
+# "desactivado" o "nein", la intención era claramente apagarla.
+NETWORK_ENABLED: bool = env_flag("JEICOB_ENABLE_NETWORK", True, on_unknown=False)
 
 # fastembed lee esta variable al cargar el modelo. Por defecto usaría
 # `/tmp/fastembed_cache`, que se borra al reiniciar (otra descarga de ~220 MB)

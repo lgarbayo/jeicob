@@ -32,7 +32,6 @@ a stderr.
 
 import asyncio
 import logging
-import os
 import sys
 import threading
 import time
@@ -69,16 +68,9 @@ log = logging.getLogger("jeicob.mcp")
 audit_log = logging.getLogger("jeicob.audit")
 
 
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, default))
-    except ValueError:
-        return default
-
-
 NETWORK_ENABLED = config.NETWORK_ENABLED
-IDLE_RELEASE_S = _env_float("JEICOB_QDRANT_IDLE_RELEASE", 30.0)
-LOCK_TIMEOUT_S = _env_float("JEICOB_QDRANT_LOCK_TIMEOUT", 10.0)
+IDLE_RELEASE_S = config.env_float("JEICOB_QDRANT_IDLE_RELEASE", 30.0)
+LOCK_TIMEOUT_S = config.env_float("JEICOB_QDRANT_LOCK_TIMEOUT", 10.0)
 PREFETCH = config.env_flag("JEICOB_MCP_PREFETCH", True)
 
 # Tramo por defecto de read_file vía MCP. El límite de salida de Claude Code

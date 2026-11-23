@@ -62,6 +62,10 @@ and this project adheres to
 
 ### Changed
 
+- Unrecognised boolean values in `JEICOB_*` flags are reported on stderr;
+  for `JEICOB_ENABLE_NETWORK` they disable the network (fail closed). Invalid
+  numbers in `JEICOB_QDRANT_*` are reported too.
+
 - With `JEICOB_ENABLE_NETWORK=0` the MCP instructions no longer mention the
   network tools; `ingest_corpus` is annotated as destructive (it prunes the
   index); MCP `read_file` caps `max_chars` at 20 000.
