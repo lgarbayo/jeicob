@@ -128,8 +128,8 @@ def _formatear(query: str, referencias: list[dict]) -> str:
     return (
         f"Referencias para '{query}' (vía {fuente}):\n"
         + "\n".join(lineas)
-        + "\n\nPara añadir una al corpus: download_reference(url_del_PDF, nombre.pdf), "
-        "luego ingest_corpus."
+        + "\n\nPara añadir una al corpus: download_reference(url_del_PDF, nombre.pdf) "
+        "(ya la indexa; no hace falta ingest_corpus)."
     )
 
 
@@ -185,8 +185,9 @@ def download_reference(url: str, filename: str) -> str:
         filename: Nombre con el que guardar el PDF en knowledge_base/.
 
     Returns:
-        Confirmación con el tamaño descargado, o un mensaje de error. Tras esto,
-        usa `ingest_corpus` para indexarlo.
+        Confirmación con el tamaño descargado, o un mensaje de error. Esta
+        función solo descarga: las tools `download_reference` de los
+        orquestadores (CLI y MCP) indexan después con `RAGEngine.ingest_file`.
 
     Nunca sobrescribe: si ya existe un fichero con ese nombre en
     knowledge_base/ devuelve un error (así una descarga no puede reemplazar un

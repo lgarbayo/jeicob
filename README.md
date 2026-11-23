@@ -31,13 +31,16 @@ en `docs_output/`.
         │  respuesta                      │ tool calling nativo
         │  (Markdown)                     ▼
         │       ┌───────────────────────────────────────────────────────┐
-        │       │  5 tools expuestas al modelo                           │
+        │       │  7 tools expuestas al modelo                           │
         │       ├───────────────────────────────────────────────────────┤
         └───────│  read_directory ─┐                                     │
                 │  read_file ──────┼──▶ src/tools.py  (sandbox de disco) │
                 │  write_summary ──┘                                     │
                 │  ingest_corpus ──┐                                     │
                 │  search_corpus ──┴──▶ src/rag.py    (RAG + Qdrant)     │
+                │  search_references ─┐                                  │
+                │  download_reference ┴▶ src/references.py (+ netguard,  │
+                │                        salida a internet)              │
                 └───────────────────────────────────────────────────────┘
                                     │                    │
                           lee de    ▼          indexa en ▼
@@ -107,6 +110,8 @@ Variables de entorno (`.env`):
 | `JEICOB_KB_DIR` | `./knowledge_base` | Carpeta de documentos fuente |
 | `JEICOB_OUTPUT_DIR` | `./docs_output` | Carpeta donde se escriben los reportes |
 | `FASTEMBED_CACHE_PATH` | `./.fastembed_cache` | Caché del modelo de embeddings |
+| `JEICOB_DOWNLOAD_ALLOWED_HOSTS` | — | Lista separada por comas; si se define (p. ej. `arxiv.org,semanticscholar.org`), `download_reference` solo descarga de esos dominios y sus subdominios (CLI y MCP) |
+| `JEICOB_ALLOW_PRIVATE_NETWORK` | `0` | `1` o `true` desactiva el bloqueo SSRF de IPs no públicas, para repositorios de la intranet (CLI y MCP) |
 
 Las rutas relativas se resuelven contra `JEICOB_HOME` (la raíz del repo), **no**
 contra el directorio desde el que lances el proceso (ver `src/config.py`).
@@ -143,8 +148,10 @@ tú › haz un reporte completo del paper de gaussian splatting en gs.md
 
 Existe una segunda variante del orquestador, `src/main_local.py`, que usa un
 **modelo local servido por [Ollama](https://ollama.com)** en lugar de Claude:
-**0 € por token, sin API key y sin que los documentos salgan de tu máquina**
-(útil para datos clínicos sensibles). Reutiliza exactamente las mismas tools y el
+**0 € por token, sin API key y sin enviar tus documentos a una API de LLM**.
+Ojo: `search_references` y `download_reference` sí hacen peticiones a internet
+(Semantic Scholar, arXiv, la URL de descarga) y en el CLI no se pueden
+desactivar; con datos clínicos, ver §8. Reutiliza exactamente las mismas tools y el
 mismo motor RAG; solo cambia el "cerebro".
 
 Requisitos: [Ollama](https://ollama.com) instalado + un modelo con soporte de
@@ -176,7 +183,7 @@ un *tool runner*, `main_local.py` implementa el bucle ReAct a mano.
 | Variante | Fichero | Coste | Calidad | Privacidad |
 |----------|---------|-------|---------|------------|
 | Claude | `src/main.py` | De pago (API key) | Alta | Datos van a la API |
-| Ollama | `src/main_local.py` | **Gratis** | Media | **100% local** |
+| Ollama | `src/main_local.py` | **Gratis** | Media | LLM local; las tools de referencias salen a internet |
 | Servidor MCP | `src/mcp_server.py` | El de tu cliente MCP | La del modelo del cliente | Datos van al LLM del cliente |
 
 ### 5.2. Como servidor MCP (Claude Code, Claude Desktop…)
@@ -261,19 +268,22 @@ mucho `JEICOB_QDRANT_LOCK_TIMEOUT` desde que se pidió, aunque haya varias en
 cola) y devuelve un error claro. Al cerrar el servidor, una ingesta en curso se
 detiene al terminar el documento actual y libera la base. Usarlos *a la vez* requiere Qdrant en servidor.
 
-Variables propias del servidor:
+Variables propias del servidor (las de descargas, `JEICOB_DOWNLOAD_ALLOWED_HOSTS`
+y `JEICOB_ALLOW_PRIVATE_NETWORK`, están en la tabla general de §4 porque
+afectan también al CLI):
 
 | Variable | Por defecto | Descripción |
 |----------|-------------|-------------|
-| `JEICOB_ENABLE_NETWORK` | `1` | `0` oculta `search_references` y `download_reference` (sin salida a internet) |
+| `JEICOB_ENABLE_NETWORK` | `1` | `0` oculta `search_references` y `download_reference`: ninguna tool sale a internet. El modelo de embeddings se descarga igualmente si no está en `FASTEMBED_CACHE_PATH`; en un equipo aislado, ejecuta antes `uv run python -m src.rag --prefetch` con red |
 | `JEICOB_QDRANT_IDLE_RELEASE` | `30` | Segundos sin uso antes de liberar el lock de Qdrant |
 | `JEICOB_QDRANT_LOCK_TIMEOUT` | `10` | Segundos esperando si otro proceso tiene el lock |
 | `JEICOB_MCP_PREFETCH` | `1` | Descarga el modelo de embeddings en segundo plano al arrancar |
-| `JEICOB_DOWNLOAD_ALLOWED_HOSTS` | — | Si se define (p. ej. `arxiv.org,semanticscholar.org`), solo esos dominios son descargables |
-| `JEICOB_ALLOW_PRIVATE_NETWORK` | `0` | `1` permite descargar de IPs privadas (repositorios en la intranet) |
 
 El servidor escribe en stderr un **log de auditoría** por cada tool, resource o
-prompt usado (nombre, `ok`/`error`, duración), sin argumentos ni contenido.
+prompt usado: método MCP, nombre de la tool o del prompt (de un resource, solo su
+tipo, `knowledge` o `reports`; `?` si no es uno conocido), `ok`/`error` y
+duración. No registra argumentos, URIs ni contenido, así que no indica qué
+documento concreto se leyó.
 
 > **Privacidad:** con MCP, lo que lean las tools (documentos, fragmentos) va al
 > LLM de tu cliente. Si `knowledge_base/` contiene datos clínicos, ten en cuenta
@@ -310,7 +320,7 @@ Para depurar a mano: `npx @modelcontextprotocol/inspector uv run --extra mcp pyt
 - El motor RAG se instancia de forma **perezosa** (`_get_rag()`): Qdrant no se abre
   hasta que una tool lo necesita, y se cierra (`close()`) al salir.
 
-Las **5 tools** que ve Claude:
+Las **7 tools** que ve Claude:
 
 | Tool | Envuelve | Cuándo la usa el agente |
 |------|----------|-------------------------|
@@ -324,12 +334,16 @@ Las **5 tools** que ve Claude:
 
 ### 6.2. Las herramientas de sistema (`src/tools.py`)
 
-Funciones documentadas con **fronteras de seguridad estrictas**. Nunca lanzan
-excepción al llamador: devuelven el error como texto para que el agente pueda
-reaccionar y reintentar.
+Funciones documentadas con **fronteras de seguridad estrictas**. Las tools nunca
+lanzan excepción al llamador: devuelven el error como texto (`ERROR: ...`) para
+que el agente pueda reaccionar y reintentar. La excepción es `read_chunk`, la
+variante de `read_file` que usa el servidor MCP: lanza `ReadError`
+(`not_found=True` si el documento no existe), porque el texto de un documento
+puede empezar legítimamente por "ERROR".
 
 - **`read_directory()`** → lista (recursivamente) los ficheros de `knowledge_base/`
-  con su tamaño, en rutas relativas listas para pasar a `read_file`.
+  con su tamaño, en rutas relativas listas para pasar a `read_file`. Si
+  `knowledge_base/` no existe o no es un directorio, devuelve `ERROR: ...`.
 
 - **`read_file(path, offset=0, max_chars=100_000)`** → lee un documento de `knowledge_base/`:
   - PDF vía `pypdf`; texto/Markdown (`.md`, `.markdown`, `.txt`, `.rst`) directo.
@@ -342,7 +356,7 @@ reaccionar y reintentar.
     PDF no lo vuelve a parsear entero.
 
 - **`write_summary(filename, title, abstract, full_explanation, key_points=None,
-  source=None)`** → escribe el reporte final. **Garantiza la estructura en el
+  source=None, overwrite=False)`** → escribe el reporte final. **Garantiza la estructura en el
   propio límite de la tool**:
   - **Valida** que existan `title`, `abstract` y `full_explanation`, y que la
     explicación sea **más extensa que el abstract** (si no, devuelve `ERROR` y el
@@ -351,6 +365,10 @@ reaccionar y reintentar.
   - **Ensambla** el Markdown con secciones fijas (ver §7).
   - **Solo escribe en `docs_output/`**: reduce `filename` a su nombre base (bloquea
     `../` y subrutas) y fuerza la extensión `.md`.
+  - **No sobrescribe** un reporte existente (lo crea de forma atómica con
+    `open("x")`): devuelve `ERROR: ya existe el reporte ...` salvo con
+    `overwrite=True`, que también acepta texto como `"true"`, `"1"` o `"sí"`
+    (los LLM locales a veces mandan el booleano como cadena).
 
 ### 6.3. El motor RAG (`src/rag.py`)
 
@@ -371,6 +389,15 @@ Clase **`RAGEngine`** que encapsula Qdrant + embeddings.
     reprocesa; si cambió, se borran sus fragmentos antiguos y se reindexa; y
     `ingest_directory` elimina del índice los documentos que ya no están en
     `knowledge_base/`. `force=True` obliga a reindexar.
+  - `ingest_directory(force=False, progress=None, should_stop=None)`: si
+    `knowledge_base/` no existe devuelve `ERROR: ...` y **no toca el índice**
+    (evita vaciarlo por una ruta mal configurada). `progress(i, total, fichero)` se
+    llama antes de cada documento; `should_stop()` también, y si devuelve True la
+    sincronización se interrumpe con `ERROR: sincronización interrumpida...` sin
+    podar. El resultado empieza por `ERROR:` solo en esos casos o si no se pudo
+    indexar ningún documento; un fallo parcial se resume en la primera línea
+    (`Sincronizado con N error(es) de M documentos (detalle abajo).`) y no cuenta
+    como error.
   - Reutiliza el sandbox de lectura de `tools.py` (misma frontera `knowledge_base/`).
 
 - **Consulta** (`query(question, top_k=5, source=None)`; `source` limita la
@@ -451,7 +478,7 @@ tool); "Fuente" y "Puntos clave" son opcionales.
   sobrescribe un reporte existente salvo con `overwrite=true`.
 - **Descargas** (`src/netguard.py`): solo `http`/`https`; el host debe resolver a
   IPs **públicas** (se rechazan loopback, redes privadas, link-local como
-  `169.254.169.254`…), y la IP se vuelve a comprobar en el socket ya conectado,
+  `169.254.169.254`…, salvo con `JEICOB_ALLOW_PRIVATE_NETWORK=1`), y la IP se vuelve a comprobar en el socket ya conectado,
   antes del TLS, para que el *DNS rebinding* no sirva. Cada redirección (máx. 5)
   se revalida, no se usan proxies del entorno y se puede restringir a una lista
   de dominios (`JEICOB_DOWNLOAD_ALLOWED_HOSTS`). También se rechazan las IPv6 que
@@ -464,7 +491,9 @@ tool); "Fuente" y "Puntos clave" son opcionales.
 - **Tools de red desactivables** en el servidor MCP (`JEICOB_ENABLE_NETWORK=0`):
   imprescindible si `knowledge_base/` contiene datos clínicos, porque la
   combinación "datos privados + contenido no confiable (PDFs descargados) + salida
-  a internet" permite exfiltrar datos con una inyección de prompt.
+  a internet" permite exfiltrar datos con una inyección de prompt. En el CLI
+  (`src.main`, `src.main_local`) las tools de red están siempre activas: con datos
+  clínicos, usa el servidor MCP con `JEICOB_ENABLE_NETWORK=0`.
 - Las claves y datos locales (`.env`, `.qdrant_data/`, `.venv/`) están en
   `.gitignore` y nunca se versionan.
 
@@ -514,7 +543,8 @@ uv run --extra mcp python -m src.mcp_smoke --full  # + RAG, progreso y lock de Q
 ## 11. Extensiones futuras
 
 - **Chunking por secciones** (títulos/párrafos) en vez de por caracteres.
-- **`top_k` configurable** en `search_corpus`.
+- **`top_k` configurable** en `search_corpus` del CLI (el servidor MCP ya lo
+  admite, de 1 a 20).
 - **Qdrant en servidor** (Docker) para concurrencia — la interfaz de `RAGEngine`
   no cambiaría.
 - Embeddings SOTA vía **Voyage AI** (partner de Anthropic) si se prioriza calidad

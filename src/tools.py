@@ -1,10 +1,12 @@
 """Herramientas de sistema (tools) que el agente LLM puede invocar.
 
 Cada función está documentada para que Claude decida cuándo usarla vía
-*tool calling* nativo (Fase 4). Las funciones devuelven siempre `str`
-(el formato que espera un `tool_result`) y nunca lanzan excepciones al
-llamador: los errores se devuelven como texto para que el modelo pueda
-reaccionar y reintentar.
+*tool calling* nativo (Fase 4). Las tools expuestas al LLM devuelven siempre
+`str` (el formato que espera un `tool_result`) y nunca lanzan excepciones al
+llamador: los errores se devuelven como texto (`"ERROR: ..."`) para que el
+modelo pueda reaccionar y reintentar. La excepción es `read_chunk`, la variante
+de `read_file` que usa el servidor MCP: lanza `ReadError` (con `not_found`)
+porque el contenido de un documento puede empezar por "ERROR".
 
 Fronteras de seguridad:
   - Lectura confinada a `knowledge_base/` (documentos fuente).
@@ -129,8 +131,9 @@ def read_directory() -> str:
     con el tamaño de cada fichero.
 
     Returns:
-        Un listado en texto con una línea por documento, o un aviso si la
-        carpeta está vacía.
+        Un listado en texto con una línea por documento, un aviso si la
+        carpeta está vacía, o "ERROR: ..." si knowledge_base/ no existe o no
+        es un directorio.
     """
     if not KNOWLEDGE_BASE_DIR.is_dir():
         return (

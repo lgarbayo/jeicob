@@ -1,8 +1,9 @@
 """Textos de sistema compartidos por los orquestadores de jeicob.
 
-`main.py` (Claude) y `main_local.py` (Ollama) usan el mismo `SYSTEM_PROMPT`,
-y el servidor MCP reutiliza `TOOLS_GUIDE` y `REPORT_RULES` en sus
-instrucciones y prompts. Así la descripción del flujo vive en un solo sitio.
+`main.py` (Claude) y `main_local.py` (Ollama) usan el mismo `SYSTEM_PROMPT`
+(que incluye `TOOLS_GUIDE`, con todas las tools), y el servidor MCP construye
+sus instrucciones con `tools_guide(network=...)`, `WORKFLOW` o `WORKFLOW_LOCAL`
+(según JEICOB_ENABLE_NETWORK) y `REPORT_RULES`. Así la descripción del flujo vive en un solo sitio.
 """
 
 from __future__ import annotations

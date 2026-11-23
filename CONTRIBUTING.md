@@ -86,7 +86,14 @@ changes — this is normal and part of the process.
 ## Coding standards
 
 This project follows **[PEP 8](https://peps.python.org/pep-0008/)** for Python
-code style. If a linter or formatter is configured (e.g., `ruff`), use it.
+code style, enforced in CI with [ruff](https://docs.astral.sh/ruff/). Ruff is
+not a project dependency: install it with `uv tool install ruff` (or
+`pip install ruff`) and run before pushing:
+
+```bash
+ruff format src/
+ruff check src/
+```
 
 General rules:
 
@@ -155,7 +162,10 @@ BREAKING CHANGE: search_corpus is now search_documents. All callers must update.
 Before submitting your PR, confirm:
 
 - [ ] Code follows PEP 8 and existing project style
-- [ ] Tests pass locally (`uv run python -m src.tools` / `uv run python -m src.rag`)
+- [ ] Smoke tests pass locally (`uv run python -m src.tools`, `uv run python -m src.rag`,
+      `uv run --extra mcp python -m src.mcp_smoke`; add `--full` if you touched the MCP
+      server or the RAG engine)
+- [ ] `ruff format --check src/` and `ruff check src/` pass
 - [ ] `CHANGELOG.md` updated (if user-facing change)
 - [ ] Commit messages follow Conventional Commits
 

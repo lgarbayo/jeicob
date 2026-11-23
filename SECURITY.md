@@ -63,9 +63,31 @@ This project has the following known security considerations:
 - **No external security audit** has been performed.
 - **API keys** (Anthropic) are required for the Claude-based orchestrator.
   Keys are stored in a local `.env` file and must never be committed.
-- The agent **downloads PDFs from external sources** (Semantic Scholar, arXiv).
-  While downloaded files are sandboxed to `knowledge_base/`, the content of
-  external papers is not validated beyond checking the `%PDF` header.
+- The agent **downloads PDFs from URLs chosen by the LLM** (normally found via
+  Semantic Scholar/arXiv, but any public http(s) host is accepted unless
+  `JEICOB_DOWNLOAD_ALLOWED_HOSTS` is set). Outbound requests go through
+  `src/netguard.py` (SSRF guard: public IPs only, including IPv4 embedded in
+  IPv6; re-checked on the connected socket and on every redirect).
+  `JEICOB_ALLOW_PRIVATE_NETWORK=1` disables the public-IP restriction.
+  Downloaded files are sandboxed to `knowledge_base/`, never overwrite existing
+  files, must contain a `%PDF-` marker in the first KB, are capped at 50 MB and
+  120 s, and PDFs over 3000 pages are rejected; their content is otherwise
+  untrusted.
+- **Prompt injection and data exfiltration.** A downloaded paper (or any
+  document) can carry instructions aimed at the LLM. Combined with private data
+  in `knowledge_base/` and tools that reach the internet, this could leak data
+  through `search_references` queries or download URLs. If `knowledge_base/`
+  holds clinical data, run the MCP server with `JEICOB_ENABLE_NETWORK=0`; the
+  CLI orchestrators (`src.main`, `src.main_local`) always expose the network
+  tools.
+- **Where data goes.** With `src.main` document text is sent to the Anthropic
+  API; with the MCP server, everything the tools read is sent to the MCP
+  client's LLM. Only `src.main_local` (Ollama) keeps document contents on the
+  machine, and its `search_references` queries still go to Semantic
+  Scholar/arXiv.
+- The MCP server writes an audit log to stderr (method, tool/prompt name or
+  resource type, outcome, duration) with no arguments or content, so it does
+  not record which document was read.
 - Dependencies have not been independently audited. Dependabot is configured
   to alert on known CVEs.
 - This project was originally developed in a hackathon setting and has not

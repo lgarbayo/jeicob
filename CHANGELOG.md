@@ -14,6 +14,8 @@ and this project adheres to
   (checked on DNS resolution and again on the connected socket, defeating DNS
   rebinding), every redirect re-validated, no environment proxies, optional
   host allowlist (`JEICOB_DOWNLOAD_ALLOWED_HOSTS`).
+  `JEICOB_ALLOW_PRIVATE_NETWORK=1` lifts the public-IP restriction (e.g.
+  intranet repositories).
 - `download_reference` never overwrites files in `knowledge_base/`, rejects
   hidden file names and requires a `%PDF` header; arXiv search uses https.
 - `write_summary` no longer overwrites an existing report unless
@@ -36,13 +38,21 @@ and this project adheres to
 - RAG ingestion is now idempotent: deterministic chunk ids plus a per-file
   SHA-256 mean re-running `ingest_corpus` no longer duplicates chunks; changed
   files are re-indexed and files removed from `knowledge_base/` are pruned.
+- `ingest_corpus` returns an error instead of pruning the whole index when
+  `knowledge_base/` does not exist (misspelled `JEICOB_KB_DIR`, unmounted
+  volume).
+- Paths set in the repo's `.env` (`QDRANT_PATH`, `JEICOB_KB_DIR`…) are honoured
+  regardless of the working directory.
 
 - MCP server: shutting down during an ingestion no longer hangs for 30 s or
   leaves Qdrant locked; cancelled calls stop the ingestion between documents;
-  queued calls share the lock wait deadline.
+  queued calls no longer add up their lock waits: each call waits at most
+  `JEICOB_QDRANT_LOCK_TIMEOUT`, counted from when it was made.
+- `ingest_corpus` (CLI and MCP) summarises partial failures in its first line
+  ("Sincronizado con N error(es)…") and only reports an error when no document
+  could be indexed, instead of depending on which file failed first.
 - MCP server: a document whose text starts with "ERROR" is no longer reported
-  as a failure; a partial ingestion failure is summarised instead of flagging
-  the whole call based on file order; unexpected RAG errors carry their cause.
+  as a failure; unexpected RAG errors carry their cause.
 - MCP resources are no longer URL-decoded twice; `.MD` reports and only
   readable formats are listed; completions are URL-quoted for templates;
   unknown prompts or missing prompt arguments return `INVALID_PARAMS`.
@@ -77,6 +87,8 @@ and this project adheres to
 - `.mcp.json` registering the server for Claude Code, and a stdio smoke test
   (`python -m src.mcp_smoke`) run in CI.
 - `JEICOB_ENABLE_NETWORK=0` to run the MCP server without internet tools.
+- MCP server settings `JEICOB_QDRANT_IDLE_RELEASE` (30 s),
+  `JEICOB_QDRANT_LOCK_TIMEOUT` (10 s) and `JEICOB_MCP_PREFETCH` (1).
 - `python -m src.rag --prefetch` to download the embedding model ahead of time.
 
 - Autonomous research agent CLI with Claude tool calling (ReAct loop).

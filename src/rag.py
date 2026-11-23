@@ -270,9 +270,11 @@ class RAGEngine:
                 documentos, se interrumpe la sincronización (sin podar).
 
         Returns:
-            Una línea por documento y un total. Empieza por "ERROR: " solo si
-            no se ha podido indexar ninguno; un fallo parcial se resume en la
-            primera línea ("Sincronizado con N errores...") sin ser un error.
+            Una línea por documento y un total. Empieza por "ERROR: " si la
+            KB no existe, si `should_stop` interrumpe la sincronización (sin
+            podar) o si no se ha podido indexar ningún documento. Un fallo
+            parcial no es un error: la primera línea dice "Sincronizado con N
+            error(es) de M documentos (detalle abajo)."
         """
         if not self.kb_dir.is_dir():
             # Sin esto, una KB inexistente (variable mal escrita, volumen sin
