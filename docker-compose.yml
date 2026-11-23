@@ -1,0 +1,29 @@
+# Qdrant en servidor para jeicob (opcional).
+#
+# Sustituye al Qdrant local en disco (.qdrant_data/, que solo admite un
+# proceso a la vez) para que el CLI y varias sesiones MCP compartan la base:
+#
+#   1. Define QDRANT_API_KEY en tu .env (p. ej. `openssl rand -hex 32`).
+#   2. docker compose up -d
+#   3. Añade al .env: QDRANT_URL=http://localhost:6333
+#   4. Reindexa: `uv run jeicob` → "indexa el corpus" (o la tool ingest_corpus).
+#      La ingesta es idempotente, así que reconstruye el índice desde
+#      knowledge_base/ sin migrar nada.
+#
+# Seguridad: el puerto solo escucha en 127.0.0.1, la API key es obligatoria y
+# la telemetría de Qdrant está desactivada (no se envía nada a qdrant.tech).
+services:
+  qdrant:
+    # Versión y digest fijados (actualízalos a la vez que qdrant-client).
+    image: qdrant/qdrant:v1.18.0@sha256:b3063c673f3973877c038eeecc392bad5011f072ee7892b56c9a8e204a3bdea9
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?Define QDRANT_API_KEY en .env}
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+volumes:
+  qdrant_storage:

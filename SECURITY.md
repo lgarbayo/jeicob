@@ -88,6 +88,12 @@ This project has the following known security considerations:
   client's LLM. Only `jeicob.main_local` (Ollama) keeps document contents on the
   machine, and its `search_references` queries still go to Semantic
   Scholar/arXiv.
+- **Qdrant server mode** (`QDRANT_URL`, `docker-compose.yml`): the bundled
+  compose file binds Qdrant to `127.0.0.1` only, requires `QDRANT_API_KEY` and
+  disables Qdrant telemetry. The server stores chunk text (document content)
+  in the `qdrant_storage` Docker volume. If you point `QDRANT_URL` at another
+  host, use https: with plain http the API key and the content travel
+  unencrypted (qdrant-client warns about it).
 - The MCP server writes an audit log to stderr (method, tool/prompt name or
   resource type, outcome, duration) with no arguments or content, so it does
   not record which document was read.

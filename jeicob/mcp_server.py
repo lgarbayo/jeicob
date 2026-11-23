@@ -121,7 +121,11 @@ class RagService:
         while True:
             try:
                 self._engine = RAGEngine()
-                log.info("Qdrant abierto en %s", config.QDRANT_PATH)
+                log.info(
+                    "Qdrant abierto (%s) en %s",
+                    "servidor" if self._engine.remote else "local",
+                    self._engine.location,
+                )
                 return self._engine
             except RuntimeError as exc:
                 if "already accessed" not in str(exc):
@@ -130,7 +134,8 @@ class RagService:
                     raise ToolError(
                         "La base vectorial está en uso por otro proceso (el CLI "
                         "`jeicob.main` u otra sesión MCP). Ciérralo y reintenta; para "
-                        "uso concurrente real hace falta Qdrant en servidor."
+                        "uso concurrente, usa Qdrant en servidor (QDRANT_URL, ver "
+                        "docker-compose.yml)."
                     ) from exc
                 time.sleep(0.5)
 
@@ -187,8 +192,15 @@ class RagService:
                 raise
             except Exception as exc:
                 log.warning("Fallo en la base vectorial: %s", type(exc).__name__)
+                pista = (
+                    " ¿Está arrancado y accesible el Qdrant de QDRANT_URL "
+                    "(y es correcta QDRANT_API_KEY)?"
+                    if config.QDRANT_URL
+                    else ""
+                )
                 raise ToolError(
-                    f"Error interno de la base vectorial ({type(exc).__name__}): {exc}"
+                    f"Error interno de la base vectorial ({type(exc).__name__}): "
+                    f"{exc}.{pista}"
                 ) from exc
             finally:
                 self._last_used = time.monotonic()

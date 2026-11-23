@@ -75,7 +75,7 @@ en `docs_output/`.
 |------------|----------|---------|
 | Gestor de proyecto | **`uv`** (Python 3.13) | Entorno y dependencias reproducibles y rápidos |
 | LLM | **`anthropic` SDK**, modelo `claude-opus-4-8` | *Tool calling* nativo + razonamiento largo; sin parsear ReAct a mano |
-| Base vectorial | **Qdrant** en local (on-disk) | RAG sin Docker; el índice persiste entre ejecuciones |
+| Base vectorial | **Qdrant** en local (on-disk) u opcionalmente en servidor (Docker) | RAG sin Docker por defecto; el servidor permite usar CLI y MCP a la vez |
 | Embeddings | **`fastembed`**, `paraphrase-multilingual-MiniLM-L12-v2` (384 dim) | Local, sin API externa; multilingüe (papers EN + normativas ES) |
 | Parseo PDF | **`pypdf`** | Extracción de texto de PDFs |
 | CLI | **`rich`** | Salida de terminal legible (Markdown, paneles) |
@@ -111,6 +111,8 @@ Variables de entorno (`.env`):
 | `JEICOB_KB_DIR` | `./knowledge_base` | Carpeta de documentos fuente |
 | `JEICOB_OUTPUT_DIR` | `./docs_output` | Carpeta donde se escriben los reportes |
 | `FASTEMBED_CACHE_PATH` | `./.fastembed_cache` | Caché del modelo de embeddings |
+| `QDRANT_URL` | — | Si se define (p. ej. `http://localhost:6333`), usa un Qdrant en servidor en vez de `QDRANT_PATH` (ver §5.3) |
+| `QDRANT_API_KEY` | — | API key del Qdrant en servidor (obligatoria con `docker-compose.yml`) |
 | `JEICOB_ENABLE_NETWORK` | `1` | `0` quita `search_references` y `download_reference` a los tres orquestadores (CLI con Claude, CLI con Ollama y servidor MCP), las omite del prompt de sistema y bloquea en `netguard` cualquier petición saliente. El modelo de embeddings se descarga igualmente si no está en `FASTEMBED_CACHE_PATH`; en un equipo aislado, ejecuta antes `uv run python -m jeicob.rag --prefetch` con red |
 | `JEICOB_DOWNLOAD_ALLOWED_HOSTS` | — | Lista separada por comas; si se define (p. ej. `arxiv.org,semanticscholar.org`), `download_reference` solo descarga de esos dominios y sus subdominios (CLI y MCP) |
 | `JEICOB_ALLOW_PRIVATE_NETWORK` | `0` | `1` o `true` desactiva el bloqueo SSRF de IPs no públicas, para repositorios de la intranet (CLI y MCP) |
@@ -269,12 +271,13 @@ Cada tool declara sus *annotations* MCP (`readOnlyHint`, `destructiveHint`,
 y los errores llegan como `isError` para que el modelo los corrija.
 
 **Concurrencia con el CLI.** Qdrant en modo local bloquea `.qdrant_data/` para un
-único proceso. El servidor abre la base solo cuando una tool la necesita y la
+único proceso (con Qdrant en servidor no hay lock: ver §5.3). El servidor abre la base solo cuando una tool la necesita y la
 **libera tras 30 s sin uso**, así que puedes alternar entre el servidor MCP y
 `jeicob.main`. Si otro proceso la tiene abierta, la tool espera unos segundos (como
 mucho `JEICOB_QDRANT_LOCK_TIMEOUT` desde que se pidió, aunque haya varias en
 cola) y devuelve un error claro. Al cerrar el servidor, una ingesta en curso se
-detiene al terminar el documento actual y libera la base. Usarlos *a la vez* requiere Qdrant en servidor.
+detiene al terminar el documento actual y libera la base. Usarlos *a la vez*
+requiere Qdrant en servidor (§5.3).
 
 Variables propias del servidor (`JEICOB_ENABLE_NETWORK` y las de descargas,
 `JEICOB_DOWNLOAD_ALLOWED_HOSTS` y `JEICOB_ALLOW_PRIVATE_NETWORK`, están en la
@@ -299,6 +302,30 @@ documento concreto se leyó.
 > embeddings ya descargado.
 
 Para depurar a mano: `npx @modelcontextprotocol/inspector uv run --extra mcp jeicob-mcp`.
+
+### 5.3. Qdrant en servidor (CLI y MCP a la vez)
+
+Por defecto el índice vive en `.qdrant_data/` (Qdrant local, un proceso a la
+vez). Para que el CLI y una o varias sesiones MCP lo compartan, arranca el Qdrant
+del `docker-compose.yml` incluido:
+
+```bash
+# 1. API key en el .env (docker compose la lee de ahí)
+echo "QDRANT_API_KEY=$(openssl rand -hex 32)" >> .env
+# 2. Arranca Qdrant (solo escucha en 127.0.0.1:6333; telemetría desactivada)
+docker compose up -d
+# 3. Apunta jeicob al servidor
+echo "QDRANT_URL=http://localhost:6333" >> .env
+```
+
+Con `QDRANT_URL` definida, jeicob ignora `QDRANT_PATH`. No hace falta migrar el
+índice local: la ingesta es idempotente, así que basta con volver a ejecutar
+`ingest_corpus` para reconstruirlo desde `knowledge_base/`. Los embeddings se
+siguen calculando en tu máquina; al servidor solo llegan los vectores y el texto
+de los fragmentos (que quedan en el volumen de Docker `qdrant_storage`).
+
+Para comprobarlo: `uv run python -m jeicob.rag --url http://localhost:6333` ejecuta
+la prueba de ingesta y consulta en una colección temporal del servidor.
 
 ---
 
@@ -529,6 +556,7 @@ jeicob/
 │   ├── mcp_server.py       # Servidor MCP stdio (§5.2)
 │   └── mcp_smoke.py        # Prueba de humo del servidor MCP
 ├── .mcp.json               # registro del servidor MCP para Claude Code
+├── docker-compose.yml      # Qdrant en servidor (opcional, §5.3)
 ├── knowledge_base/         # entrada: papers a analizar
 └── docs_output/            # salida: reportes Markdown
 ```
@@ -544,6 +572,7 @@ uv run python -m jeicob.tools    # lista KB, valida escritura y sandbox
 uv run python -m jeicob.rag      # ingesta idempotente + consulta end-to-end (descarga el modelo)
 uv run --extra mcp python -m jeicob.mcp_smoke         # servidor MCP por stdio (sin modelo)
 uv run --extra mcp python -m jeicob.mcp_smoke --full  # + RAG, progreso y lock de Qdrant
+uv run python -m jeicob.rag --url http://localhost:6333  # RAG contra Qdrant en servidor (§5.3)
 ```
 
 ---
@@ -553,8 +582,6 @@ uv run --extra mcp python -m jeicob.mcp_smoke --full  # + RAG, progreso y lock d
 - **Chunking por secciones** (títulos/párrafos) en vez de por caracteres.
 - **`top_k` configurable** en `search_corpus` del CLI (el servidor MCP ya lo
   admite, de 1 a 20).
-- **Qdrant en servidor** (Docker) para concurrencia — la interfaz de `RAGEngine`
-  no cambiaría.
 - Embeddings SOTA vía **Voyage AI** (partner de Anthropic) si se prioriza calidad
   sobre aislamiento.
 - Generación de reportes en **PDF/DOCX** (el sandbox de Anthropic trae

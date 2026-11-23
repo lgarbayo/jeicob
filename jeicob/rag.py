@@ -18,16 +18,20 @@ El modelo de embedding por defecto es multilingüe (español + inglés) para
 cubrir tanto papers técnicos como normativas clínicas.
 
 Usa la API de inferencia local de qdrant-client (`models.Document`), que
-vectoriza el texto dentro del cliente. Qdrant en modo `path=` bloquea el
-directorio para un único proceso a la vez; para concurrencia real se migraría
-a Qdrant en servidor (Docker) sin cambiar esta interfaz.
+vectoriza el texto dentro del cliente (también con Qdrant en servidor: los
+embeddings se calculan siempre en local). Qdrant en modo `path=` bloquea el
+directorio para un único proceso a la vez; con `QDRANT_URL` se usa un Qdrant
+en servidor (`docker compose up -d`) y varios procesos pueden compartirlo.
 """
 
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
+import urllib.parse
 import uuid
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 
@@ -64,6 +68,16 @@ def _sha256(ruta: Path) -> str:
     return h.hexdigest()
 
 
+def _is_loopback_url(url: str) -> bool:
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _is_ingestible_rel(rel: str) -> bool:
     """Regla única de qué se ingiere: extensión soportada y ningún componente
     de la ruta oculto (empieza por '.')."""
@@ -90,9 +104,33 @@ class RAGEngine:
         collection_name: str = DEFAULT_COLLECTION,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         kb_dir: str | Path | None = None,
+        qdrant_url: str | None = None,
+        api_key: str | None = None,
     ) -> None:
-        path = Path(qdrant_path) if qdrant_path else DEFAULT_QDRANT_PATH
-        self.client = QdrantClient(path=str(path))
+        """Abre la base vectorial.
+
+        Prioridad: `qdrant_url` explícito → `qdrant_path` explícito →
+        `QDRANT_URL` del entorno → `QDRANT_PATH` (local en disco).
+        """
+        url = qdrant_url or (None if qdrant_path else config.QDRANT_URL)
+        if url:
+            with warnings.catch_warnings():
+                # http con API key solo es un problema si el tráfico sale de la
+                # máquina; con localhost (docker-compose.yml) no hay que avisar.
+                if _is_loopback_url(url):
+                    warnings.filterwarnings(
+                        "ignore", message="Api key is used with an insecure"
+                    )
+                self.client = QdrantClient(
+                    url=url, api_key=api_key or config.QDRANT_API_KEY, timeout=30
+                )
+            self.location = url
+            self.remote = True
+        else:
+            path = Path(qdrant_path) if qdrant_path else DEFAULT_QDRANT_PATH
+            self.client = QdrantClient(path=str(path))
+            self.location = str(path)
+            self.remote = False
         self.collection_name = collection_name
         self.embedding_model = embedding_model
         self.kb_dir = Path(kb_dir).resolve() if kb_dir else tools.KNOWLEDGE_BASE_DIR
@@ -362,7 +400,8 @@ class RAGEngine:
         return self.client.count(self.collection_name).count
 
     def close(self) -> None:
-        """Cierra el cliente Qdrant y libera el lock del directorio on-disk."""
+        """Cierra el cliente Qdrant (en modo local, libera el lock del
+        directorio on-disk)."""
         self.client.close()
 
 
@@ -389,13 +428,21 @@ if __name__ == "__main__":
         print(prefetch_model())
         sys.exit(0)
 
+    # `--url URL` ejecuta la misma prueba contra un Qdrant en servidor (con
+    # QDRANT_API_KEY si hace falta), en una colección temporal que se borra.
+    url = sys.argv[sys.argv.index("--url") + 1] if "--url" in sys.argv else None
+
     # BD Qdrant y knowledge_base temporales: no toca los datos reales.
     with tempfile.TemporaryDirectory() as tmp:
         kb = Path(tmp) / "kb"
         kb.mkdir()
         rag = RAGEngine(
-            qdrant_path=Path(tmp) / "qdrant", collection_name="_smoke", kb_dir=kb
+            qdrant_path=None if url else Path(tmp) / "qdrant",
+            qdrant_url=url,
+            collection_name=f"_smoke_{os.getpid()}" if url else "_smoke",
+            kb_dir=kb,
         )
+        print(f"Qdrant: {'servidor ' + rag.location if rag.remote else 'local'}")
         a = kb / "a.md"
         try:
             a.write_text(
@@ -450,4 +497,6 @@ if __name__ == "__main__":
             print(rag.query("¿qué es el estándar DICOM?", top_k=2, source="b.txt"))
             print("\nOK: ingesta idempotente verificada.")
         finally:
+            if rag.remote:
+                rag.client.delete_collection(rag.collection_name)
             rag.close()

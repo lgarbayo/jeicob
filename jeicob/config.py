@@ -14,10 +14,16 @@ Variables de entorno (todas opcionales):
 | `QDRANT_PATH`          | `<home>/.qdrant_data`    |
 | `FASTEMBED_CACHE_PATH` | `<home>/.fastembed_cache`|
 | `JEICOB_ENABLE_NETWORK`| `1`                      |
+| `QDRANT_URL`           | — (Qdrant local en disco)|
+| `QDRANT_API_KEY`       | —                        |
 
 Las rutas relativas se resuelven contra `JEICOB_HOME`, **nunca** contra el
 directorio de trabajo: así `QDRANT_PATH=./.qdrant_data` apunta al mismo sitio
 aunque el proceso arranque en `/`.
+
+Con `QDRANT_URL` (p. ej. `http://localhost:6333`, ver `docker-compose.yml`) la
+base vectorial es un Qdrant en servidor en vez del directorio `QDRANT_PATH`:
+varios procesos (CLI, sesiones MCP) pueden usarla a la vez.
 
 `JEICOB_ENABLE_NETWORK=0` quita `search_references` y `download_reference` a
 los tres orquestadores (CLI con Claude, CLI con Ollama y servidor MCP) y hace
@@ -121,6 +127,10 @@ QDRANT_PATH: Path = _resolve(
 FASTEMBED_CACHE_PATH: Path = _resolve(
     os.getenv("FASTEMBED_CACHE_PATH"), PROJECT_ROOT / ".fastembed_cache", PROJECT_ROOT
 )
+
+# Qdrant en servidor (opcional). Si se define, tiene prioridad sobre QDRANT_PATH.
+QDRANT_URL: str | None = (os.getenv("QDRANT_URL") or "").strip() or None
+QDRANT_API_KEY: str | None = (os.getenv("QDRANT_API_KEY") or "").strip() or None
 
 # Tools con salida a internet (search_references, download_reference).
 # Un valor no reconocido desactiva la red (falla cerrado): si alguien escribe

@@ -45,6 +45,10 @@ cp .env.example .env
 uv run python -m jeicob.tools
 uv run python -m jeicob.rag
 uv run --extra mcp python -m jeicob.mcp_smoke
+
+# Optional, if you touch jeicob/rag.py: same RAG test against a Qdrant server
+# (QDRANT_API_KEY in .env, then `docker compose up -d`)
+uv run python -m jeicob.rag --url http://localhost:6333
 ```
 
 ---

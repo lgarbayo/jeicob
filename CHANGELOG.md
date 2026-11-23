@@ -85,6 +85,13 @@ and this project adheres to
 
 ### Added
 
+- Optional Qdrant server mode: `QDRANT_URL` / `QDRANT_API_KEY` switch the RAG
+  engine from the on-disk store to a Qdrant server, so the CLI and several MCP
+  sessions can share the index. `docker-compose.yml` runs a pinned Qdrant on
+  `127.0.0.1` with a mandatory API key and telemetry disabled;
+  `python -m jeicob.rag --url URL` runs the RAG smoke test against a server,
+  and CI runs it against a Qdrant service container.
+
 - MCP server (`jeicob/mcp_server.py`, stdio, official `mcp` SDK 2.x as the
   optional `mcp` extra) exposing the seven research tools to Claude Code,
   Claude Desktop and other MCP clients, with tool annotations, `isError`
