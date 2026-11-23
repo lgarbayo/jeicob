@@ -1,6 +1,10 @@
 [project]
 name = "jeicob"
 version = "0.1.0"
+description = "Agente de investigación con RAG local (CLI y servidor MCP) para literatura de salud digital"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
     "anthropic>=0.116.0",
@@ -12,7 +16,20 @@ dependencies = [
     "rich>=15.0.0",
 ]
 
+[project.scripts]
+jeicob = "jeicob.main:main"
+jeicob-local = "jeicob.main_local:main"
+jeicob-mcp = "jeicob.mcp_server:main"
+
 [project.optional-dependencies]
 mcp = [
     "mcp>=2.3,<3",
 ]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# El paquete vive en la raíz del repo (jeicob/), no en src/jeicob/.
+module-root = ""

@@ -1,6 +1,6 @@
 """Servidor MCP de jeicob (transporte stdio).
 
-Expone las mismas herramientas que el orquestador CLI (`src/main.py`) a
+Expone las mismas herramientas que el orquestador CLI (`jeicob/main.py`) a
 cualquier cliente MCP —Claude Code, Claude Desktop…—, que pasa a ser el
 "cerebro" del agente. Reutiliza sin cambios `tools.py`, `rag.py` y
 `references.py`; aquí solo se adapta cada función al protocolo:
@@ -15,9 +15,9 @@ cualquier cliente MCP —Claude Code, Claude Desktop…—, que pasa a ser el
     sesión MCP puedan usar el índice.
 
 Ejecución (requiere el extra `mcp`):
-    uv run --extra mcp python -m src.mcp_server
+    uv run --extra mcp python -m jeicob.mcp_server
 
-Variables de entorno propias (además de las de `src/config.py`):
+Variables de entorno propias (además de las de `jeicob/config.py`):
 
 | Variable                     | Por defecto | Efecto                                         |
 |------------------------------|-------------|------------------------------------------------|
@@ -129,7 +129,7 @@ class RagService:
                 if time.monotonic() >= deadline or self._stopping.is_set():
                     raise ToolError(
                         "La base vectorial está en uso por otro proceso (el CLI "
-                        "`src.main` u otra sesión MCP). Ciérralo y reintenta; para "
+                        "`jeicob.main` u otra sesión MCP). Ciérralo y reintenta; para "
                         "uso concurrente real hace falta Qdrant en servidor."
                     ) from exc
                 time.sleep(0.5)

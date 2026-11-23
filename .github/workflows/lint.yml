@@ -16,6 +16,6 @@ jobs:
       - name: Install ruff
         run: pip install ruff
       - name: Check formatting
-        run: ruff format --check src/
+        run: ruff format --check jeicob/
       - name: Lint
-        run: ruff check src/
+        run: ruff check jeicob/

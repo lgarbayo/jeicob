@@ -42,9 +42,9 @@ cp .env.example .env
 
 ```bash
 # Run the smoke tests for each module
-uv run python -m src.tools
-uv run python -m src.rag
-uv run --extra mcp python -m src.mcp_smoke
+uv run python -m jeicob.tools
+uv run python -m jeicob.rag
+uv run --extra mcp python -m jeicob.mcp_smoke
 ```
 
 ---
@@ -91,8 +91,8 @@ not a project dependency: install it with `uv tool install ruff` (or
 `pip install ruff`) and run before pushing:
 
 ```bash
-ruff format src/
-ruff check src/
+ruff format jeicob/
+ruff check jeicob/
 ```
 
 General rules:
@@ -162,10 +162,10 @@ BREAKING CHANGE: search_corpus is now search_documents. All callers must update.
 Before submitting your PR, confirm:
 
 - [ ] Code follows PEP 8 and existing project style
-- [ ] Smoke tests pass locally (`uv run python -m src.tools`, `uv run python -m src.rag`,
-      `uv run --extra mcp python -m src.mcp_smoke`; add `--full` if you touched the MCP
+- [ ] Smoke tests pass locally (`uv run python -m jeicob.tools`, `uv run python -m jeicob.rag`,
+      `uv run --extra mcp python -m jeicob.mcp_smoke`; add `--full` if you touched the MCP
       server or the RAG engine)
-- [ ] `ruff format --check src/` and `ruff check src/` pass
+- [ ] `ruff format --check jeicob/` and `ruff check jeicob/` pass
 - [ ] `CHANGELOG.md` updated (if user-facing change)
 - [ ] Commit messages follow Conventional Commits
 

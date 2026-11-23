@@ -6,7 +6,7 @@ ejecuta el bucle ReAct automáticamente: el modelo decide qué tool llamar, el
 runner la ejecuta, le devuelve el resultado y repite hasta terminar el turno.
 
 Ejecución:
-    uv run python -m src.main
+    uv run python -m jeicob.main
 """
 
 from __future__ import annotations

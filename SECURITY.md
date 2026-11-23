@@ -66,7 +66,7 @@ This project has the following known security considerations:
 - The agent **downloads PDFs from URLs chosen by the LLM** (normally found via
   Semantic Scholar/arXiv, but any public http(s) host is accepted unless
   `JEICOB_DOWNLOAD_ALLOWED_HOSTS` is set). Outbound requests go through
-  `src/netguard.py` (SSRF guard: public IPs only, including IPv4 embedded in
+  `jeicob/netguard.py` (SSRF guard: public IPs only, including IPv4 embedded in
   IPv6; re-checked on the connected socket and on every redirect).
   `JEICOB_ALLOW_PRIVATE_NETWORK=1` disables the public-IP restriction.
   Downloaded files are sandboxed to `knowledge_base/`, never overwrite existing
@@ -78,14 +78,14 @@ This project has the following known security considerations:
   in `knowledge_base/` and tools that reach the internet, this could leak data
   through `search_references` queries or download URLs. If `knowledge_base/`
   holds clinical data, set `JEICOB_ENABLE_NETWORK=0`: the CLI orchestrators
-  and the MCP server then drop the network tools, and `src/netguard.py` refuses
+  and the MCP server then drop the network tools, and `jeicob/netguard.py` refuses
   any outbound request as a second barrier. The embedding model is still
   downloaded by fastembed (from Hugging Face, no document data) if it is not
   cached; on air-gapped machines pre-fetch it with
-  `uv run python -m src.rag --prefetch`.
-- **Where data goes.** With `src.main` document text is sent to the Anthropic
+  `uv run python -m jeicob.rag --prefetch`.
+- **Where data goes.** With `jeicob.main` document text is sent to the Anthropic
   API; with the MCP server, everything the tools read is sent to the MCP
-  client's LLM. Only `src.main_local` (Ollama) keeps document contents on the
+  client's LLM. Only `jeicob.main_local` (Ollama) keeps document contents on the
   machine, and its `search_references` queries still go to Semantic
   Scholar/arXiv.
 - The MCP server writes an audit log to stderr (method, tool/prompt name or

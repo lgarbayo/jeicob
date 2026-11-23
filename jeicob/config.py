@@ -8,7 +8,7 @@ Variables de entorno (todas opcionales):
 
 | Variable               | Por defecto              |
 |------------------------|--------------------------|
-| `JEICOB_HOME`          | raíz del repositorio     |
+| `JEICOB_HOME`          | raíz del repo (o ~/.jeicob) |
 | `JEICOB_KB_DIR`        | `<home>/knowledge_base`  |
 | `JEICOB_OUTPUT_DIR`    | `<home>/docs_output`     |
 | `QDRANT_PATH`          | `<home>/.qdrant_data`    |
@@ -35,7 +35,15 @@ from pathlib import Path
 
 _log = logging.getLogger("jeicob.config")
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_PKG_DIR = Path(__file__).resolve().parent
+# Desde un checkout (o una instalación editable) la raíz es el repo; instalado
+# como paquete normal en site-packages no hay repo, así que los datos van a
+# ~/.jeicob (configurable con JEICOB_HOME).
+_REPO_ROOT = (
+    _PKG_DIR.parent
+    if (_PKG_DIR.parent / "pyproject.toml").is_file()
+    else Path.home() / ".jeicob"
+)
 
 # Carga el `.env` del repo ANTES de leer las rutas: si no, un QDRANT_PATH o
 # JEICOB_KB_DIR definidos en `.env` se ignorarían (los orquestadores llaman a

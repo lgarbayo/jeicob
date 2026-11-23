@@ -19,6 +19,6 @@ jobs:
         run: uv sync --extra mcp
       - name: Run smoke tests
         run: |
-          uv run python -m src.tools
-          uv run --extra mcp python -m src.mcp_smoke
-          uv run python -m src.rag
+          uv run python -m jeicob.tools
+          uv run --extra mcp python -m jeicob.mcp_smoke
+          uv run python -m jeicob.rag

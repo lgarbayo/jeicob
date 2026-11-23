@@ -1,6 +1,6 @@
 """Variante LOCAL y gratuita del orquestador (Ollama en vez de Claude).
 
-Idéntico propósito que `src/main.py`, pero el "cerebro" es un modelo local
+Idéntico propósito que `jeicob/main.py`, pero el "cerebro" es un modelo local
 servido por Ollama: 0 € por token, sin API key y sin enviar los documentos a una
 API de LLM. Reutiliza tal cual las tools (Fase 2) y el motor RAG (Fase 3). Las
 tools de referencias sí salen a internet; `JEICOB_ENABLE_NETWORK=0` las quita.
@@ -13,7 +13,7 @@ Requisitos:
     - Un modelo con soporte de tools descargado:  ollama pull qwen2.5:7b
 
 Ejecución:
-    uv run python -m src.main_local
+    uv run python -m jeicob.main_local
 """
 
 from __future__ import annotations

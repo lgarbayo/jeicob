@@ -10,7 +10,7 @@ and this project adheres to
 
 ### Security
 
-- Outbound HTTP goes through `src/netguard.py`: http(s) only, public IPs only
+- Outbound HTTP goes through `jeicob/netguard.py`: http(s) only, public IPs only
   (checked on DNS resolution and again on the connected socket, defeating DNS
   rebinding), every redirect re-validated, no environment proxies, optional
   host allowlist (`JEICOB_DOWNLOAD_ALLOWED_HOSTS`).
@@ -62,6 +62,12 @@ and this project adheres to
 
 ### Changed
 
+- The Python package is now `jeicob` (was `src`): run modules as
+  `python -m jeicob.<module>`. The project is installable (`uv_build`
+  backend) and provides the `jeicob`, `jeicob-local` and `jeicob-mcp`
+  commands; `.mcp.json` uses `jeicob-mcp`. Outside a checkout, data defaults
+  to `~/.jeicob`.
+
 - Unrecognised boolean values in `JEICOB_*` flags are reported on stderr;
   for `JEICOB_ENABLE_NETWORK` they disable the network (fail closed). Invalid
   numbers in `JEICOB_QDRANT_*` are reported too.
@@ -72,14 +78,14 @@ and this project adheres to
 
 - `read_file` reads long documents in pages (`offset`, `max_chars`) and caches
   extracted text.
-- Data paths are configurable via environment (`src/config.py`) and resolved
+- Data paths are configurable via environment (`jeicob/config.py`) and resolved
   against the repo root instead of the working directory.
 - The fastembed model cache now lives in `.fastembed_cache/` instead of `/tmp`.
-- Single shared system prompt (`src/prompts.py`) for both orchestrators.
+- Single shared system prompt (`jeicob/prompts.py`) for both orchestrators.
 
 ### Added
 
-- MCP server (`src/mcp_server.py`, stdio, official `mcp` SDK 2.x as the
+- MCP server (`jeicob/mcp_server.py`, stdio, official `mcp` SDK 2.x as the
   optional `mcp` extra) exposing the seven research tools to Claude Code,
   Claude Desktop and other MCP clients, with tool annotations, `isError`
   results, ingestion progress notifications, and a single-threaded Qdrant
@@ -89,14 +95,14 @@ and this project adheres to
   `ask_corpus`), argument completion, and resource list-changed
   notifications.
 - `.mcp.json` registering the server for Claude Code, and a stdio smoke test
-  (`python -m src.mcp_smoke`) run in CI.
+  (`python -m jeicob.mcp_smoke`) run in CI.
 - `JEICOB_ENABLE_NETWORK=0` removes the internet tools (`search_references`,
   `download_reference`) from the CLI orchestrators (Claude and Ollama) and the
   MCP server, leaves them out of the system prompt and instructions, and makes
-  `src/netguard.py` refuse any outbound request.
+  `jeicob/netguard.py` refuse any outbound request.
 - MCP server settings `JEICOB_QDRANT_IDLE_RELEASE` (30 s),
   `JEICOB_QDRANT_LOCK_TIMEOUT` (10 s) and `JEICOB_MCP_PREFETCH` (1).
-- `python -m src.rag --prefetch` to download the embedding model ahead of time.
+- `python -m jeicob.rag --prefetch` to download the embedding model ahead of time.
 
 - Autonomous research agent CLI with Claude tool calling (ReAct loop).
 - RAG engine using Qdrant (on-disk) and fastembed for local multilingual

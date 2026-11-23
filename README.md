@@ -25,7 +25,7 @@ en `docs_output/`.
 
 ```
                           ┌─────────────────────────────────────────────┐
-   Terminal (tú)  ───────▶│  src/main.py — Orquestador (bucle ReAct)     │
+   Terminal (tú)  ───────▶│  jeicob/main.py — Orquestador (bucle ReAct)  │
         ▲                 │  Claude (claude-opus-4-8) + Tool Runner SDK  │
         │                 └───────────────┬─────────────────────────────┘
         │  respuesta                      │ tool calling nativo
@@ -34,13 +34,13 @@ en `docs_output/`.
         │       │  7 tools expuestas al modelo                           │
         │       ├───────────────────────────────────────────────────────┤
         └───────│  read_directory ─┐                                     │
-                │  read_file ──────┼──▶ src/tools.py  (sandbox de disco) │
+                │  read_file ──────┼──▶ jeicob/tools.py (sandbox)        │
                 │  write_summary ──┘                                     │
                 │  ingest_corpus ──┐                                     │
-                │  search_corpus ──┴──▶ src/rag.py    (RAG + Qdrant)     │
+                │  search_corpus ──┴──▶ jeicob/rag.py   (RAG + Qdrant)   │
                 │  search_references ─┐                                  │
-                │  download_reference ┴▶ src/references.py (+ netguard,  │
-                │                        salida a internet)              │
+                │  download_reference ┴▶ jeicob/references.py            │
+                │                        (+ netguard, salida a internet) │
                 └───────────────────────────────────────────────────────┘
                                     │                    │
                           lee de    ▼          indexa en ▼
@@ -55,9 +55,9 @@ en `docs_output/`.
 
 | Capa | Fichero | Responsabilidad |
 |------|---------|-----------------|
-| Orquestador | `src/main.py` | Bucle conversacional + *tool calling* con Claude |
-| Herramientas | `src/tools.py` | Acceso a disco con fronteras de seguridad |
-| Motor RAG | `src/rag.py` | Ingesta y búsqueda semántica sobre Qdrant |
+| Orquestador | `jeicob/main.py` | Bucle conversacional + *tool calling* con Claude |
+| Herramientas | `jeicob/tools.py` | Acceso a disco con fronteras de seguridad |
+| Motor RAG | `jeicob/rag.py` | Ingesta y búsqueda semántica sobre Qdrant |
 
 **Carpetas de datos:**
 
@@ -91,7 +91,8 @@ Requisitos: [`uv`](https://docs.astral.sh/uv/) instalado y una **API key de Anth
 git clone git@github.com:lgarbayo/jeicob.git
 cd jeicob
 
-# uv crea el entorno virtual y sincroniza dependencias automáticamente
+# uv crea el entorno virtual, sincroniza dependencias e instala el paquete
+# `jeicob` (editable) con sus comandos: jeicob, jeicob-local y jeicob-mcp
 uv sync
 
 # Configura tu clave
@@ -110,18 +111,20 @@ Variables de entorno (`.env`):
 | `JEICOB_KB_DIR` | `./knowledge_base` | Carpeta de documentos fuente |
 | `JEICOB_OUTPUT_DIR` | `./docs_output` | Carpeta donde se escriben los reportes |
 | `FASTEMBED_CACHE_PATH` | `./.fastembed_cache` | Caché del modelo de embeddings |
-| `JEICOB_ENABLE_NETWORK` | `1` | `0` quita `search_references` y `download_reference` a los tres orquestadores (CLI con Claude, CLI con Ollama y servidor MCP), las omite del prompt de sistema y bloquea en `netguard` cualquier petición saliente. El modelo de embeddings se descarga igualmente si no está en `FASTEMBED_CACHE_PATH`; en un equipo aislado, ejecuta antes `uv run python -m src.rag --prefetch` con red |
+| `JEICOB_ENABLE_NETWORK` | `1` | `0` quita `search_references` y `download_reference` a los tres orquestadores (CLI con Claude, CLI con Ollama y servidor MCP), las omite del prompt de sistema y bloquea en `netguard` cualquier petición saliente. El modelo de embeddings se descarga igualmente si no está en `FASTEMBED_CACHE_PATH`; en un equipo aislado, ejecuta antes `uv run python -m jeicob.rag --prefetch` con red |
 | `JEICOB_DOWNLOAD_ALLOWED_HOSTS` | — | Lista separada por comas; si se define (p. ej. `arxiv.org,semanticscholar.org`), `download_reference` solo descarga de esos dominios y sus subdominios (CLI y MCP) |
 | `JEICOB_ALLOW_PRIVATE_NETWORK` | `0` | `1` o `true` desactiva el bloqueo SSRF de IPs no públicas, para repositorios de la intranet (CLI y MCP) |
 
 Las rutas relativas se resuelven contra `JEICOB_HOME` (la raíz del repo), **no**
-contra el directorio desde el que lances el proceso (ver `src/config.py`).
+contra el directorio desde el que lances el proceso (ver `jeicob/config.py`). Si
+instalas jeicob como paquete normal (no editable, fuera del repo), `JEICOB_HOME`
+pasa a ser `~/.jeicob` y el `.env` se lee de ahí.
 
 Los flags booleanos aceptan `1`/`true`/`yes`/`sí`/`on` y `0`/`false`/`no`/`off`
 (o vacío). Un valor distinto se avisa por stderr; en `JEICOB_ENABLE_NETWORK`
 desactiva la red (falla cerrado) y en los demás se usa el valor por defecto.
 
-> **Tip:** `uv run python -m src.rag --prefetch` descarga el modelo de embeddings
+> **Tip:** `uv run python -m jeicob.rag --prefetch` descarga el modelo de embeddings
 > (~0.22 GB) de antemano, para que la primera consulta no tenga que esperar.
 
 ---
@@ -132,7 +135,7 @@ desactiva la red (falla cerrado) y en los demás se usa el valor por defecto.
 2. Arranca el agente:
 
 ```bash
-uv run python -m src.main
+uv run jeicob          # equivale a: uv run python -m jeicob.main
 ```
 
 3. Conversa. Ejemplos de instrucciones:
@@ -151,7 +154,7 @@ tú › haz un reporte completo del paper de gaussian splatting en gs.md
 
 ### 5.1. Modo local gratuito (Ollama, sin API key)
 
-Existe una segunda variante del orquestador, `src/main_local.py`, que usa un
+Existe una segunda variante del orquestador, `jeicob/main_local.py`, que usa un
 **modelo local servido por [Ollama](https://ollama.com)** en lugar de Claude:
 **0 € por token, sin API key y sin enviar tus documentos a una API de LLM**.
 Ojo: `search_references` y `download_reference` sí hacen peticiones a internet
@@ -170,7 +173,7 @@ ollama serve
 ollama pull qwen2.5:7b
 
 # 3. Lanza el agente local
-uv run python -m src.main_local
+uv run jeicob-local    # o: uv run python -m jeicob.main_local
 ```
 
 Variables de entorno propias del modo local:
@@ -187,13 +190,13 @@ un *tool runner*, `main_local.py` implementa el bucle ReAct a mano.
 
 | Variante | Fichero | Coste | Calidad | Privacidad |
 |----------|---------|-------|---------|------------|
-| Claude | `src/main.py` | De pago (API key) | Alta | Datos van a la API |
-| Ollama | `src/main_local.py` | **Gratis** | Media | LLM local; las tools de referencias salen a internet salvo con `JEICOB_ENABLE_NETWORK=0` |
-| Servidor MCP | `src/mcp_server.py` | El de tu cliente MCP | La del modelo del cliente | Datos van al LLM del cliente |
+| Claude | `jeicob/main.py` | De pago (API key) | Alta | Datos van a la API |
+| Ollama | `jeicob/main_local.py` | **Gratis** | Media | LLM local; las tools de referencias salen a internet salvo con `JEICOB_ENABLE_NETWORK=0` |
+| Servidor MCP | `jeicob/mcp_server.py` | El de tu cliente MCP | La del modelo del cliente | Datos van al LLM del cliente |
 
 ### 5.2. Como servidor MCP (Claude Code, Claude Desktop…)
 
-`src/mcp_server.py` expone las mismas tools por el
+`jeicob/mcp_server.py` expone las mismas tools por el
 [Model Context Protocol](https://modelcontextprotocol.io), de modo que **el
 "cerebro" pasa a ser tu cliente MCP** (Claude Code, Claude Desktop u otro): no
 necesitas `ANTHROPIC_API_KEY` ni el bucle de `main.py`. Reutiliza sin cambios
@@ -204,18 +207,18 @@ necesitas `ANTHROPIC_API_KEY` ni el bucle de `main.py`. Reutiliza sin cambios
 uv sync --extra mcp
 
 # Recomendado: descarga el modelo de embeddings antes de la primera consulta
-uv run python -m src.rag --prefetch
+uv run python -m jeicob.rag --prefetch
 ```
 
 **Claude Code** — el repo ya trae un `.mcp.json` con el servidor `jeicob`. Abre
 `claude` en la raíz del repo, aprueba el servidor cuando te lo pida y comprueba
-con `/mcp` que está conectado. Ese `.mcp.json` lanza `python -m src.mcp_server`
-con rutas relativas, así que **solo funciona si Claude Code arranca en la raíz
-del repo**. Para usarlo desde cualquier otro directorio, regístralo con ruta
-absoluta:
+con `/mcp` que está conectado. Ese `.mcp.json` lanza `uv run ... jeicob-mcp`,
+y `uv` busca el proyecto en el directorio actual, así que **solo funciona si
+Claude Code arranca en la raíz del repo**. Para usarlo desde cualquier otro
+directorio, regístralo con ruta absoluta:
 
 ```bash
-claude mcp add jeicob -- uv --directory /ruta/absoluta/a/jeicob run --extra mcp python -m src.mcp_server
+claude mcp add jeicob -- uv --directory /ruta/absoluta/a/jeicob run --extra mcp jeicob-mcp
 ```
 
 **Claude Desktop** — añade a `claude_desktop_config.json` (Desktop no hereda el
@@ -227,7 +230,7 @@ claude mcp add jeicob -- uv --directory /ruta/absoluta/a/jeicob run --extra mcp 
     "jeicob": {
       "command": "/ruta/absoluta/a/uv",
       "args": ["--directory", "/ruta/absoluta/a/jeicob", "run", "--extra", "mcp",
-               "python", "-m", "src.mcp_server"]
+               "jeicob-mcp"]
     }
   }
 }
@@ -268,7 +271,7 @@ y los errores llegan como `isError` para que el modelo los corrija.
 **Concurrencia con el CLI.** Qdrant en modo local bloquea `.qdrant_data/` para un
 único proceso. El servidor abre la base solo cuando una tool la necesita y la
 **libera tras 30 s sin uso**, así que puedes alternar entre el servidor MCP y
-`src.main`. Si otro proceso la tiene abierta, la tool espera unos segundos (como
+`jeicob.main`. Si otro proceso la tiene abierta, la tool espera unos segundos (como
 mucho `JEICOB_QDRANT_LOCK_TIMEOUT` desde que se pidió, aunque haya varias en
 cola) y devuelve un error claro. Al cerrar el servidor, una ingesta en curso se
 detiene al terminar el documento actual y libera la base. Usarlos *a la vez* requiere Qdrant en servidor.
@@ -291,16 +294,17 @@ documento concreto se leyó.
 
 > **Privacidad:** con MCP, lo que lean las tools (documentos, fragmentos) va al
 > LLM de tu cliente. Si `knowledge_base/` contiene datos clínicos, ten en cuenta
-> a dónde envía los datos ese cliente; la garantía "nada sale de tu máquina" solo
-> la da `main_local.py`.
+> a dónde envía los datos ese cliente; que nada salga de tu máquina solo lo
+> garantiza `main_local.py` con `JEICOB_ENABLE_NETWORK=0` y el modelo de
+> embeddings ya descargado.
 
-Para depurar a mano: `npx @modelcontextprotocol/inspector uv run --extra mcp python -m src.mcp_server`.
+Para depurar a mano: `npx @modelcontextprotocol/inspector uv run --extra mcp jeicob-mcp`.
 
 ---
 
 ## 6. Cómo funciona por dentro (el "CÓMO")
 
-### 6.1. El orquestador (`src/main.py`)
+### 6.1. El orquestador (`jeicob/main.py`)
 
 - Define un **system prompt** que describe la misión del agente, cuándo usar cada
   tool y las reglas (citar fuentes, responder en español, actuar cuando tiene
@@ -336,7 +340,7 @@ Las **7 tools** que ve Claude:
 | `download_reference(url, filename)` | `references.download_reference` + RAG | Descargar un PDF a `knowledge_base/` **e indexarlo** |
 | `write_summary(...)` | `tools.write_summary` | Escribir el reporte final |
 
-### 6.2. Las herramientas de sistema (`src/tools.py`)
+### 6.2. Las herramientas de sistema (`jeicob/tools.py`)
 
 Funciones documentadas con **fronteras de seguridad estrictas**. Las tools nunca
 lanzan excepción al llamador: devuelven el error como texto (`ERROR: ...`) para
@@ -374,7 +378,7 @@ puede empezar legítimamente por "ERROR".
     `overwrite=True`, que también acepta texto como `"true"`, `"1"` o `"sí"`
     (los LLM locales a veces mandan el booleano como cadena).
 
-### 6.3. El motor RAG (`src/rag.py`)
+### 6.3. El motor RAG (`jeicob/rag.py`)
 
 Clase **`RAGEngine`** que encapsula Qdrant + embeddings.
 
@@ -417,7 +421,7 @@ Clase **`RAGEngine`** que encapsula Qdrant + embeddings.
 - Usa la **API no deprecada** de qdrant-client (`upsert`/`query_points` con
   `models.Document`), no la interfaz de conveniencia `add()`/`query()`.
 
-### 6.4. Recopilación de referencias (`src/references.py`)
+### 6.4. Recopilación de referencias (`jeicob/references.py`)
 
 Cierra el ciclo de la misión ("**buscar**, ingerir y resumir"): además de trabajar
 con lo que hay en `knowledge_base/`, el agente puede **descubrir y descargar**
@@ -480,7 +484,7 @@ tool); "Fuente" y "Puntos clave" son opcionales.
   del directorio permitido (bloquea `../`, rutas absolutas y symlinks).
 - `write_summary` además reduce el nombre de fichero a su base, fuerza `.md` y no
   sobrescribe un reporte existente salvo con `overwrite=true`.
-- **Descargas** (`src/netguard.py`): solo `http`/`https`; el host debe resolver a
+- **Descargas** (`jeicob/netguard.py`): solo `http`/`https`; el host debe resolver a
   IPs **públicas** (se rechazan loopback, redes privadas, link-local como
   `169.254.169.254`…, salvo con `JEICOB_ALLOW_PRIVATE_NETWORK=1`), y la IP se vuelve a comprobar en el socket ya conectado,
   antes del TLS, para que el *DNS rebinding* no sirva. Cada redirección (máx. 5)
@@ -512,7 +516,7 @@ jeicob/
 ├── uv.lock
 ├── .env.example            # plantilla de configuración
 ├── .gitignore
-├── src/
+├── jeicob/
 │   ├── __init__.py
 │   ├── config.py           # rutas configurables por entorno
 │   ├── prompts.py          # system prompt compartido por los orquestadores
@@ -536,10 +540,10 @@ jeicob/
 Cada módulo trae una prueba de humo ejecutable:
 
 ```bash
-uv run python -m src.tools    # lista KB, valida escritura y sandbox
-uv run python -m src.rag      # ingesta idempotente + consulta end-to-end (descarga el modelo)
-uv run --extra mcp python -m src.mcp_smoke         # servidor MCP por stdio (sin modelo)
-uv run --extra mcp python -m src.mcp_smoke --full  # + RAG, progreso y lock de Qdrant
+uv run python -m jeicob.tools    # lista KB, valida escritura y sandbox
+uv run python -m jeicob.rag      # ingesta idempotente + consulta end-to-end (descarga el modelo)
+uv run --extra mcp python -m jeicob.mcp_smoke         # servidor MCP por stdio (sin modelo)
+uv run --extra mcp python -m jeicob.mcp_smoke --full  # + RAG, progreso y lock de Qdrant
 ```
 
 ---

@@ -1,6 +1,6 @@
 """Prueba de humo del servidor MCP con un cliente real por stdio.
 
-Arranca `python -m src.mcp_server` como subproceso, con knowledge_base,
+Arranca `python -m jeicob.mcp_server` como subproceso, con knowledge_base,
 docs_output y Qdrant temporales (no toca tus datos), y comprueba:
 
   - que lista las tools esperadas y que stdout solo lleva JSON-RPC (cualquier
@@ -11,12 +11,12 @@ docs_output y Qdrant temporales (no toca tus datos), y comprueba:
   - que con `JEICOB_ENABLE_NETWORK=0` desaparecen las tools de red.
 
 Con `--full` además ejercita el RAG de verdad (necesita el modelo de
-embeddings; `uv run python -m src.rag --prefetch` lo descarga): ingesta
+embeddings; `uv run python -m jeicob.rag --prefetch` lo descarga): ingesta
 idempotente, búsqueda, y el comportamiento cuando otro proceso tiene el lock
 de Qdrant.
 
 Ejecución:
-    uv run --extra mcp python -m src.mcp_smoke [--full]
+    uv run --extra mcp python -m jeicob.mcp_smoke [--full]
 """
 
 import sys
@@ -75,7 +75,7 @@ async def _run(full: bool) -> None:
 
         params = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "src.mcp_server"],
+            args=["-m", "jeicob.mcp_server"],
             cwd=str(Path(__file__).resolve().parent.parent),
             env={
                 "JEICOB_KB_DIR": str(kb),

@@ -64,7 +64,7 @@ def check_url(url: str) -> None:
         # Segunda barrera: los orquestadores ya no registran las tools de red,
         # pero nada de jeicob que pase por aquí debe salir a internet. (La
         # descarga del modelo de embeddings la hace fastembed por su cuenta:
-        # en equipos aislados, precárgalo con `python -m src.rag --prefetch`.)
+        # en equipos aislados, precárgalo con `python -m jeicob.rag --prefetch`.)
         raise BlockedDestinationError(
             "la salida a internet está desactivada (JEICOB_ENABLE_NETWORK=0)."
         )
