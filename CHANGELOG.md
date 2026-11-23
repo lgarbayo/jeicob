@@ -85,6 +85,12 @@ and this project adheres to
 
 ### Added
 
+- MCP over streamable-http: `jeicob-mcp --transport http [--host] [--port]`
+  (or `JEICOB_MCP_TRANSPORT/HOST/PORT`), so several clients can share one
+  server. A bearer token (`JEICOB_MCP_TOKEN`, ≥ 32 characters) is mandatory,
+  it binds to `127.0.0.1` by default with the SDK's DNS-rebinding protection,
+  and the smoke test covers 401/421 and tool calls over HTTP.
+
 - Optional Qdrant server mode: `QDRANT_URL` / `QDRANT_API_KEY` switch the RAG
   engine from the on-disk store to a Qdrant server, so the CLI and several MCP
   sessions can share the index. `docker-compose.yml` runs a pinned Qdrant on

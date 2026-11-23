@@ -8,7 +8,9 @@ docs_output y Qdrant temporales (no toca tus datos), y comprueba:
   - lectura, paginación y sandbox de read_file;
   - validación y escritura de write_summary;
   - que los errores llegan como `isError=true`;
-  - que con `JEICOB_ENABLE_NETWORK=0` desaparecen las tools de red.
+  - que con `JEICOB_ENABLE_NETWORK=0` desaparecen las tools de red;
+  - el transporte streamable-http: token obligatorio (401), protección DNS
+    rebinding (421) y tools accesibles con el token correcto.
 
 Con `--full` además ejercita el RAG de verdad (necesita el modelo de
 embeddings; `uv run python -m jeicob.rag --prefetch` lo descarga): ingesta
@@ -19,12 +21,20 @@ Ejecución:
     uv run --extra mcp python -m jeicob.mcp_smoke [--full]
 """
 
+import os
+import socket
+import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import anyio
 from mcp import Client, StdioServerParameters
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS, ResourceTemplateReference
 
@@ -266,7 +276,82 @@ async def _run(full: bool) -> None:
                 assert red not in (c.instructions or ""), c.instructions
         print("JEICOB_ENABLE_NETWORK=0: sin tools de red OK")
 
-    print("OK: servidor MCP verificado por stdio.")
+        await _check_http(params)
+
+    print("OK: servidor MCP verificado (stdio y HTTP).")
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _post_status(url: str, headers: dict[str, str]) -> int:
+    req = urllib.request.Request(
+        url,
+        data=b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            **headers,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
+def _start_http_server(params: StdioServerParameters, token: str, port: int):
+    """Arranca el servidor por HTTP y espera a que acepte conexiones."""
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "jeicob.mcp_server", "--transport", "http"]
+        + ["--port", str(port)],
+        cwd=params.cwd,
+        env={**os.environ, **params.env, "JEICOB_MCP_TOKEN": token},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    for _ in range(150):
+        try:
+            socket.create_connection(("127.0.0.1", port), 0.2).close()
+            return proc
+        except OSError:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.2)
+    proc.kill()
+    raise AssertionError("el servidor HTTP no arrancó")
+
+
+async def _check_http(params: StdioServerParameters) -> None:
+    """Servidor por streamable-http: token, DNS rebinding y uso real."""
+    token = "smoke-" + "x" * 40
+    port = _free_port()
+    proc = await anyio.to_thread.run_sync(_start_http_server, params, token, port)
+    url = f"http://127.0.0.1:{port}/mcp"
+    try:
+        bueno = {"Authorization": f"Bearer {token}"}
+        estados = await anyio.to_thread.run_sync(
+            lambda: (
+                _post_status(url, {}),
+                _post_status(url, {"Authorization": "Bearer " + "y" * 46}),
+                _post_status(url, {**bueno, "Host": "evil.example"}),
+            )
+        )
+        assert estados == (401, 401, 421), estados
+        http = create_mcp_http_client(headers=bueno)
+        async with Client(streamable_http_client(url, http_client=http)) as c:
+            nombres = {t.name for t in (await c.list_tools()).tools}
+            assert nombres == EXPECTED_TOOLS, nombres
+            r = await c.call_tool("read_file", {"path": "dicom.md", "max_chars": 50})
+            assert not r.is_error and "DICOM" in _text(r), _text(r)
+        print("HTTP: token obligatorio, DNS rebinding y tools OK")
+    finally:
+        proc.terminate()
+        await anyio.to_thread.run_sync(lambda: proc.wait(timeout=15))
 
 
 if __name__ == "__main__":

@@ -94,6 +94,13 @@ This project has the following known security considerations:
   in the `qdrant_storage` Docker volume. If you point `QDRANT_URL` at another
   host, use https: with plain http the API key and the content travel
   unencrypted (qdrant-client warns about it).
+- **MCP over HTTP** (`jeicob-mcp --transport http`): every request needs
+  `Authorization: Bearer $JEICOB_MCP_TOKEN` (≥ 32 characters, compared in
+  constant time); the server refuses to start without it. It binds to
+  `127.0.0.1` by default, where the SDK's DNS-rebinding protection checks the
+  `Host`/`Origin` headers. Binding to another interface serves plain HTTP: put
+  it behind an https reverse proxy, or the token and documents travel
+  unencrypted.
 - The MCP server writes an audit log to stderr (method, tool/prompt name or
   resource type, outcome, duration) with no arguments or content, so it does
   not record which document was read.

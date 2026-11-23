@@ -1,4 +1,4 @@
-"""Servidor MCP de jeicob (transporte stdio).
+"""Servidor MCP de jeicob (transportes stdio y streamable-http).
 
 Expone las mismas herramientas que el orquestador CLI (`jeicob/main.py`) a
 cualquier cliente MCP —Claude Code, Claude Desktop…—, que pasa a ser el
@@ -15,7 +15,14 @@ cualquier cliente MCP —Claude Code, Claude Desktop…—, que pasa a ser el
     sesión MCP puedan usar el índice.
 
 Ejecución (requiere el extra `mcp`):
-    uv run --extra mcp python -m jeicob.mcp_server
+    uv run --extra mcp jeicob-mcp                      # stdio (por defecto)
+    JEICOB_MCP_TOKEN=... uv run --extra mcp jeicob-mcp --transport http \
+        [--host 127.0.0.1] [--port 8765]               # streamable-http
+
+En HTTP el token es obligatorio: cada petición debe llevar
+`Authorization: Bearer <JEICOB_MCP_TOKEN>`. Por defecto solo escucha en
+127.0.0.1 (con la protección DNS rebinding del SDK); otro `--host` expone el
+servidor a la red, sin TLS: ponlo detrás de un proxy con https.
 
 Variables de entorno propias (además de las de `jeicob/config.py`):
 
@@ -25,13 +32,18 @@ Variables de entorno propias (además de las de `jeicob/config.py`):
 | `JEICOB_QDRANT_IDLE_RELEASE` | `30`        | segundos sin uso antes de liberar el lock      |
 | `JEICOB_QDRANT_LOCK_TIMEOUT` | `10`        | segundos esperando un lock ocupado             |
 | `JEICOB_MCP_PREFETCH`        | `1`         | `0` no descarga el modelo al arrancar          |
+| `JEICOB_MCP_TOKEN`           | —           | token bearer (obligatorio con --transport http)|
 
 Importante (stdio): nada de este módulo puede escribir en stdout; los logs van
-a stderr.
+a stderr (también en HTTP, por coherencia).
 """
 
+import argparse
 import asyncio
+import hmac
+import ipaddress
 import logging
+import os
 import sys
 import threading
 import time
@@ -806,7 +818,92 @@ async def _complete(ref, argument, _context) -> Completion | None:
     )
 
 
-def main() -> None:
+# --- Transporte HTTP ---------------------------------------------------------
+
+DEFAULT_HTTP_PORT = 8765
+MIN_TOKEN_CHARS = 32
+
+
+class BearerTokenMiddleware:
+    """Middleware ASGI: exige `Authorization: Bearer <token>` en cada petición
+    HTTP. Compara en tiempo constante y responde 401 sin detalles."""
+
+    def __init__(self, app: Any, token: str) -> None:
+        self.app = app
+        self._esperado = f"Bearer {token}".encode()
+
+    async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
+        if scope["type"] != "http":  # lifespan: pasa sin comprobar
+            await self.app(scope, receive, send)
+            return
+        recibido = dict(scope.get("headers") or []).get(b"authorization", b"")
+        if not hmac.compare_digest(recibido, self._esperado):
+            audit_log.info("http %s rechazado 401", scope.get("path", "?")[:40])
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"www-authenticate", b'Bearer realm="jeicob"'),
+                    ],
+                }
+            )
+            await send(
+                {"type": "http.response.body", "body": b'{"error":"unauthorized"}'}
+            )
+            return
+        await self.app(scope, receive, send)
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def build_http_app(token: str, host: str = "127.0.0.1") -> Any:
+    """App ASGI del servidor por streamable-http, protegida con token.
+
+    En loopback, el SDK activa además la protección contra DNS rebinding
+    (valida las cabeceras Host y Origin)."""
+    if len(token) < MIN_TOKEN_CHARS:
+        raise SystemExit(
+            f"JEICOB_MCP_TOKEN debe tener al menos {MIN_TOKEN_CHARS} caracteres "
+            "(genera uno con: openssl rand -hex 32)."
+        )
+    return BearerTokenMiddleware(mcp.streamable_http_app(host=host), token)
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="jeicob-mcp", description="Servidor MCP de jeicob."
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default=os.getenv("JEICOB_MCP_TRANSPORT", "stdio"),
+        help="stdio (por defecto, lo lanza el cliente) o http (streamable-http)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.getenv("JEICOB_MCP_HOST", "127.0.0.1"),
+        help="interfaz HTTP (por defecto 127.0.0.1: solo esta máquina)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(config.env_float("JEICOB_MCP_PORT", DEFAULT_HTTP_PORT)),
+        help=f"puerto HTTP (por defecto {DEFAULT_HTTP_PORT})",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
     # force=True: sustituye el RichHandler que instala el SDK (parte las
     # líneas a 80 columnas e ignora este formato).
     logging.basicConfig(
@@ -820,12 +917,34 @@ def main() -> None:
     # resultado sin contenido.
     logging.getLogger("mcp").setLevel(logging.WARNING)
     log.info(
-        "jeicob MCP · KB=%s · salida=%s · red=%s",
+        "jeicob MCP · KB=%s · salida=%s · red=%s · transporte=%s",
         config.KNOWLEDGE_BASE_DIR,
         config.DOCS_OUTPUT_DIR,
         "sí" if NETWORK_ENABLED else "no",
+        args.transport,
     )
-    mcp.run(transport="stdio")
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+        return
+
+    import uvicorn  # dependencia del SDK mcp
+
+    token = (os.getenv("JEICOB_MCP_TOKEN") or "").strip()
+    if not token:
+        raise SystemExit(
+            "El transporte HTTP exige JEICOB_MCP_TOKEN (p. ej. "
+            "`export JEICOB_MCP_TOKEN=$(openssl rand -hex 32)`)."
+        )
+    if not _is_loopback(args.host):
+        log.warning(
+            "Escuchando en %s: el servidor es accesible desde la red y HTTP no "
+            "cifra el token ni los documentos. Ponlo detrás de un proxy https.",
+            args.host,
+        )
+    app = build_http_app(token, args.host)
+    log.info("Escuchando en http://%s:%d/mcp", args.host, args.port)
+    # log_config=None: uvicorn usa el logging de arriba (stderr), no el suyo.
+    uvicorn.run(app, host=args.host, port=args.port, log_config=None)
 
 
 if __name__ == "__main__":

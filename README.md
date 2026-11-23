@@ -288,6 +288,8 @@ tabla general de §4 porque afectan también al CLI):
 | `JEICOB_QDRANT_IDLE_RELEASE` | `30` | Segundos sin uso antes de liberar el lock de Qdrant |
 | `JEICOB_QDRANT_LOCK_TIMEOUT` | `10` | Segundos esperando si otro proceso tiene el lock |
 | `JEICOB_MCP_PREFETCH` | `1` | Descarga el modelo de embeddings en segundo plano al arrancar |
+| `JEICOB_MCP_TOKEN` | — | Token bearer, obligatorio con `--transport http` (≥ 32 caracteres) |
+| `JEICOB_MCP_TRANSPORT` / `_HOST` / `_PORT` | `stdio` / `127.0.0.1` / `8765` | Equivalen a `--transport`, `--host` y `--port` |
 
 El servidor escribe en stderr un **log de auditoría** por cada tool, resource o
 prompt usado: método MCP, nombre de la tool o del prompt (de un resource, solo su
@@ -302,6 +304,26 @@ documento concreto se leyó.
 > embeddings ya descargado.
 
 Para depurar a mano: `npx @modelcontextprotocol/inspector uv run --extra mcp jeicob-mcp`.
+
+**Por HTTP (streamable-http).** En vez de que cada cliente lance su propio
+proceso por stdio, puedes dejar un servidor escuchando y conectar varios
+clientes a él (con Qdrant en servidor, §5.3, además pueden convivir con el CLI):
+
+```bash
+export JEICOB_MCP_TOKEN=$(openssl rand -hex 32)   # obligatorio, ≥ 32 caracteres
+uv run --extra mcp jeicob-mcp --transport http     # http://127.0.0.1:8765/mcp
+claude mcp add --transport http jeicob http://127.0.0.1:8765/mcp \
+  --header "Authorization: Bearer $JEICOB_MCP_TOKEN"
+```
+
+- Cada petición debe llevar `Authorization: Bearer <JEICOB_MCP_TOKEN>`; si no,
+  responde 401. El servidor no arranca sin token.
+- Por defecto solo escucha en `127.0.0.1`, con la protección contra *DNS
+  rebinding* del SDK (cabeceras `Host`/`Origin` de fuera de localhost → 421).
+- `--host 0.0.0.0` (o `JEICOB_MCP_HOST`) lo expone a la red **sin TLS**: el
+  token y los documentos viajarían en claro. Hazlo solo detrás de un proxy
+  inverso con https.
+- `--port` / `JEICOB_MCP_PORT` cambian el puerto (8765 por defecto).
 
 ### 5.3. Qdrant en servidor (CLI y MCP a la vez)
 
@@ -553,7 +575,7 @@ jeicob/
 │   ├── netguard.py         # HTTP saliente con protección SSRF
 │   ├── main.py             # Fase 4 — orquestador CLI con Claude (ReAct)
 │   ├── main_local.py       # Variante local gratuita con Ollama (§5.1)
-│   ├── mcp_server.py       # Servidor MCP stdio (§5.2)
+│   ├── mcp_server.py       # Servidor MCP stdio y streamable-http (§5.2)
 │   └── mcp_smoke.py        # Prueba de humo del servidor MCP
 ├── .mcp.json               # registro del servidor MCP para Claude Code
 ├── docker-compose.yml      # Qdrant en servidor (opcional, §5.3)
@@ -570,7 +592,7 @@ Cada módulo trae una prueba de humo ejecutable:
 ```bash
 uv run python -m jeicob.tools    # lista KB, valida escritura y sandbox
 uv run python -m jeicob.rag      # ingesta idempotente + consulta end-to-end (descarga el modelo)
-uv run --extra mcp python -m jeicob.mcp_smoke         # servidor MCP por stdio (sin modelo)
+uv run --extra mcp python -m jeicob.mcp_smoke         # servidor MCP por stdio y HTTP (sin modelo)
 uv run --extra mcp python -m jeicob.mcp_smoke --full  # + RAG, progreso y lock de Qdrant
 uv run python -m jeicob.rag --url http://localhost:6333  # RAG contra Qdrant en servidor (§5.3)
 ```
