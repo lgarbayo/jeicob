@@ -11,7 +11,9 @@ abre URLs con estas garantías:
     cada redirección, con un máximo de `MAX_REDIRECTS` saltos.
   - La IP a la que **realmente** se conecta el socket debe ser pública
     (`ipaddress.is_global`). Se comprueba tras el `connect()` y antes del
-    handshake TLS, así que el DNS rebinding no sirve para colarse.
+    handshake TLS, así que el DNS rebinding no sirve para colarse. Una IPv6
+    que lleve dentro una IPv4 (NAT64, 6to4, Teredo…) se valida también por
+    esa IPv4.
   - Sin proxies del entorno (el peer sería el proxy, no el destino).
   - Lista opcional de hosts permitidos.
 
@@ -63,6 +65,10 @@ def check_url(url: str) -> None:
     host = (partes.hostname or "").lower()
     if not host:
         raise BlockedDestinationError("la URL no tiene host.")
+    try:
+        puerto = partes.port
+    except ValueError as exc:  # p. ej. ":99999" o ":abc"
+        raise BlockedDestinationError(f"puerto no válido en la URL: {exc}") from exc
     permitidos = _allowed_hosts()
     if permitidos and not any(host == h or host.endswith("." + h) for h in permitidos):
         raise BlockedDestinationError(
@@ -74,22 +80,47 @@ def check_url(url: str) -> None:
     # intenta la conexión (evita escanear puertos internos por timing). La
     # segunda barrera, en el socket, cubre el DNS rebinding.
     try:
-        infos = socket.getaddrinfo(host, partes.port or None, type=socket.SOCK_STREAM)
+        infos = socket.getaddrinfo(host, puerto or None, type=socket.SOCK_STREAM)
     except (socket.gaierror, UnicodeError) as exc:
         raise BlockedDestinationError(f"no se pudo resolver '{host}': {exc}") from exc
     for *_resto, sockaddr in infos:
         _check_ip(sockaddr[0])
 
 
+# Prefijos IPv6 que transportan una IPv4 dentro (traducción o túnel): la IPv6
+# puede parecer pública mientras apunta, en realidad, a una IPv4 interna.
+_NAT64 = (
+    ipaddress.IPv6Network("64:ff9b::/96"),  # NAT64 bien conocido (RFC 6052)
+    ipaddress.IPv6Network("64:ff9b:1::/48"),  # NAT64 local (RFC 8215)
+)
+_IPV4_COMPAT = ipaddress.IPv6Network("::/96")  # IPv4-compatible (obsoleto)
+
+
+def _embedded_ipv4(ip: ipaddress.IPv6Address) -> list[ipaddress.IPv4Address]:
+    """IPv4 incrustadas en una IPv6 (mapped, NAT64, compat, 6to4, Teredo)."""
+    incrustadas: list[ipaddress.IPv4Address] = []
+    if ip.ipv4_mapped is not None:
+        incrustadas.append(ip.ipv4_mapped)
+    if any(ip in red for red in _NAT64) or ip in _IPV4_COMPAT:
+        incrustadas.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    if ip.sixtofour is not None:
+        incrustadas.append(ip.sixtofour)
+    if ip.teredo is not None:
+        incrustadas.extend(ip.teredo)  # (servidor, cliente)
+    return incrustadas
+
+
 def _check_ip(direccion: str) -> None:
     ip = ipaddress.ip_address(direccion.split("%", 1)[0])
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    if not ip.is_global:
-        raise BlockedDestinationError(
-            f"destino bloqueado: {ip} no es una dirección pública "
-            "(protección SSRF; ver JEICOB_ALLOW_PRIVATE_NETWORK)."
-        )
+    candidatas: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = [ip]
+    if isinstance(ip, ipaddress.IPv6Address):
+        candidatas += _embedded_ipv4(ip)
+    for candidata in candidatas:
+        if not candidata.is_global:
+            raise BlockedDestinationError(
+                f"destino bloqueado: {ip} no es una dirección pública "
+                "(protección SSRF; ver JEICOB_ALLOW_PRIVATE_NETWORK)."
+            )
 
 
 def _check_peer(sock: socket.socket) -> None:

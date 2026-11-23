@@ -20,6 +20,7 @@ solo http(s) y solo IPs públicas, también tras redirecciones).
 from __future__ import annotations
 
 import json
+import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -31,7 +32,12 @@ _S2_FIELDS = "title,authors,year,externalIds,openAccessPdf"
 _ARXIV_SEARCH = "https://export.arxiv.org/api/query"
 _USER_AGENT = "jeicob-research-agent/0.1 (+https://github.com/lgarbayo/jeicob)"
 _MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
-_TIMEOUT = 45
+_TIMEOUT = 45  # por operación de socket (conexión o cada lectura)
+# Plazo total de una descarga: el timeout de socket se reinicia con cada
+# lectura, así que un servidor que envía un byte cada pocos segundos colgaría
+# la tool indefinidamente sin este tope.
+_DOWNLOAD_DEADLINE_S = 120
+_CHUNK = 256 * 1024
 
 # Namespaces del Atom que devuelve arXiv.
 _ATOM = "{http://www.w3.org/2005/Atom}"
@@ -153,6 +159,24 @@ def search_references(query: str, limit: int = 5) -> str:
         return f"ERROR al buscar referencias (Semantic Scholar y arXiv): {exc}"
 
 
+def _read_limited(resp, max_bytes: int, deadline_s: float) -> bytes:
+    """Lee hasta `max_bytes` por bloques, con un plazo total de `deadline_s`."""
+    limite = time.monotonic() + deadline_s
+    partes: list[bytes] = []
+    leidos = 0
+    while leidos < max_bytes:
+        if time.monotonic() > limite:
+            raise TimeoutError(
+                f"la descarga superó el plazo total de {deadline_s:.0f} s."
+            )
+        bloque = resp.read(min(_CHUNK, max_bytes - leidos))
+        if not bloque:
+            break
+        partes.append(bloque)
+        leidos += len(bloque)
+    return b"".join(partes)
+
+
 def download_reference(url: str, filename: str) -> str:
     """Descarga un PDF a `knowledge_base/` para poder ingerirlo después.
 
@@ -191,8 +215,8 @@ def download_reference(url: str, filename: str) -> str:
         with netguard.open_url(
             url, headers={"User-Agent": _USER_AGENT}, timeout=_TIMEOUT
         ) as resp:
-            datos = resp.read(_MAX_PDF_BYTES + 1)
-    except Exception as exc:  # noqa: BLE001
+            datos = _read_limited(resp, _MAX_PDF_BYTES + 1, _DOWNLOAD_DEADLINE_S)
+    except Exception as exc:  # noqa: BLE001 — incluye el TimeoutError del plazo
         return f"ERROR al descargar '{url}': {exc}"
 
     if len(datos) > _MAX_PDF_BYTES:
